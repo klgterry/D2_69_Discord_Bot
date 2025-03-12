@@ -264,46 +264,41 @@ async def 클래스(ctx, username: str = None, *, classes: str = None):
 
     except:
         await ctx.send("⏳ 시간이 초과되었습니다. 다시 `!클래스`를 입력하세요!")
-
-import discord
-import requests
-import re
-
 @bot.command()
 async def 결과등록(ctx, *, input_text: str = None):
     """
-    !결과등록 명령어: 승리팀과 패배팀을 입력하면 경기 결과를 등록
+    ✅ !결과등록 명령어: 승리팀과 패배팀을 입력하면 경기 결과를 등록
     """
     if input_text:
         # ✅ 즉시 등록 모드 (명령어 입력 시 바로 실행)
-        win_players, lose_players = parse_match_input(input_text)
+        win_players, lose_players, win_score, lose_score = parse_match_input(input_text)
         if win_players is None or lose_players is None:
             await ctx.send(
                 "🚨 **잘못된 형식입니다!**\n"
-                "`!결과등록 [승]유저1,유저2,유저3,유저4[패]유저5,유저6,유저7,유저8`\n"
+                "`!결과등록 [아래5]유저1,유저2,유저3,유저4 vs [위4]유저5,유저6,유저7,유저8`\n"
                 "✅ **순서 주의:** 반드시 `드,어,넥,슴` 클래스 순서대로 입력해야 합니다."
             )
             return
-        await validate_and_register(ctx, win_players, lose_players)
+        await validate_and_register(ctx, win_players, lose_players, win_score, lose_score)
         return
 
     # ✅ 대화형 입력 모드 (설명을 보여주고 입력을 유도)
     await ctx.send(
         "🏆 **경기 결과를 입력하세요!**\n"
-        "예시: `!결과등록 [승]유저1,유저2,유저3,유저4[패]유저5,유저6,유저7,유저8`\n"
+        "예시: `!결과등록 [아래5]유저1,유저2,유저3,유저4 vs [위4]유저5,유저6,유저7,유저8`\n"
         "✅ **순서 주의:** 반드시 `드,어,넥,슴` 클래스 순서대로 입력해야 합니다."
     )
 
 
-async def validate_and_register(ctx, win_players, lose_players):
+async def validate_and_register(ctx, win_players, lose_players, win_score, lose_score):
     """
-    유저 등록 여부 확인 후 경기 등록 진행 (중복 등록 방지)
+    ✅ 유저 등록 여부 확인 후 경기 등록 진행 (중복 등록 방지)
     """
     if len(win_players) != 4 or len(lose_players) != 4:
         await ctx.send(
             "🚨 **잘못된 입력입니다!**\n"
             "승리팀 혹은 패배팀의 인원 수 (4명) 를 확인해주세요.\n\n"
-            "🔹 **올바른 입력 예시:** `!결과등록 [승]유저1,유저2,유저3,유저4[패]유저5,유저6,유저7,유저8`"
+            "🔹 **올바른 입력 예시:** `!결과등록 [아래5]유저1,유저2,유저3,유저4 vs [위4]유저5,유저6,유저7,유저8`"
         )
         return
 
@@ -336,23 +331,25 @@ async def validate_and_register(ctx, win_players, lose_players):
         "action": "registerResult",
         "game_number": game_number,
         "winners": win_players,
-        "losers": lose_players
+        "losers": lose_players,
+        "win_score": win_score,
+        "lose_score": lose_score
     }
 
     view = ConfirmView(
         ctx,
         payload,
         lambda x: f"✅ 경기 결과가 기록되었습니다! **[게임번호: {x}]**\n"
-                  f" - 등록 [승] {format_team(win_players)}\n"
-                  f" - 등록 [패] {format_team(lose_players)}",
+                  f"🏆 **승리 팀:** {format_team(win_players)} (스코어: {win_score})\n"
+                  f"❌ **패배 팀:** {format_team(lose_players)} (스코어: {lose_score})",
         "🚨 경기 등록 요청에 실패했습니다.",
         payload_type="game_result",
         game_number=game_number
     )
 
     await ctx.send(
-        f"📊 **승리 팀:** {format_team(win_players)}\n"
-        f"❌ **패배 팀:** {format_team(lose_players)}\n\n"
+        f"📊 **승리 팀:** {format_team(win_players)} (스코어: {win_score})\n"
+        f"❌ **패배 팀:** {format_team(lose_players)} (스코어: {lose_score})\n\n"
         f"경기 결과를 등록하시겠습니까?",
         view=view
     )
@@ -360,21 +357,28 @@ async def validate_and_register(ctx, win_players, lose_players):
 
 def parse_match_input(input_text):
     """
-    경기 결과 텍스트에서 승리/패배 팀을 추출하는 함수
+    ✅ 경기 결과 텍스트에서 승리/패배 팀을 추출하는 함수
     """
-    match = re.match(r"\[승\](.+?)\[패\](.+)", input_text)
+    match = re.match(r"\[아래(\d+)](.+?) vs \[위(\d+)](.+)", input_text)
     if not match:
-        return None, None
+        return None, None, None, None
 
-    win_players = [p.strip() for p in match.group(1).split(",")]
-    lose_players = [p.strip() for p in match.group(2).split(",")]
+    win_score = int(match.group(1))  # ✅ 아래팀 점수
+    lose_score = int(match.group(3))  # ✅ 위팀 점수
 
-    return win_players, lose_players
+    if win_score > lose_score:
+        win_players = [p.strip() for p in match.group(2).split("/")]
+        lose_players = [p.strip() for p in match.group(4).split("/")]
+    else:
+        win_players = [p.strip() for p in match.group(4).split("/")]
+        lose_players = [p.strip() for p in match.group(2).split("/")]
+
+    return win_players, lose_players, win_score, lose_score
 
 
 def format_team(team):
     """
-    유저명 + 클래스 (드, 어, 넥, 슴) 포맷 적용
+    ✅ 유저명 + 클래스 (드, 어, 넥, 슴) 포맷 적용
     """
     class_order = ["드", "어", "넥", "슴"]
     return ", ".join(f"{player}({class_order[i]})" for i, player in enumerate(team))
@@ -540,10 +544,14 @@ async def 도움말(ctx):
         "!결과조회 [게임번호] - 경기 결과 조회\n"
         "!결과삭제 [게임번호] - 경기 기록 삭제\n"
         "!팀생성 [유저1, 유저2, ...] - 자동 팀 생성\n"
+        "!팀생성고급 [유저1, 유저2, ...] - 자동 팀 생성 (관리자 전용)\n"
         "!도움말 - 명령어 목록 확인\n"
         "```"
     )
     await ctx.send(help_text)
+
+import random
+import random
 
 @bot.command()
 async def 팀생성(ctx, *, players: str = None):
@@ -551,13 +559,13 @@ async def 팀생성(ctx, *, players: str = None):
     ✅ MMR 순위를 기반으로 1~4등 중 2명, 5~8등 중 2명을 뽑아 팀을 나눔
     """
     if not players:
-        await ctx.send("🚨 팀을 생성할 유저 목록을 입력하세요! (쉼표로 구분, 정확히 8명 입력)")
+        await ctx.send("🚨 팀을 생성할 유저 목록을 입력하세요! (쉼표로 구분, **정확히 8명 입력 필수**)")
         return
 
     player_list = [p.strip() for p in players.split(",")]
 
     if len(player_list) != 8:
-        await ctx.send("🚨 정확히 8명의 유저를 입력하세요!")
+        await ctx.send("🚨 **정확히 8명의 유저를 입력하세요!**")
         return
 
     payload = {"action": "getPlayersInfo", "players": player_list}
@@ -588,28 +596,16 @@ async def 팀생성(ctx, *, players: str = None):
     # ✅ MMR 기준 정렬 (내림차순)
     players_data.sort(key=lambda x: x['mmr'], reverse=True)
 
-    # ✅ 팀을 나누는 함수
+    # ✅ 팀을 나누는 함수 (1~4등 중 2명, 5~8등 중 2명을 랜덤 선택)
     def create_balanced_teams():
-        # 1~4등 중 2명, 5~8등 중 2명씩 랜덤 선택
-        top_half = random.sample(players_data[:4], 2)
-        bottom_half = random.sample(players_data[4:], 2)
+        top_half = random.sample(players_data[:4], 2)  # 상위 4명 중 2명 선택
+        bottom_half = random.sample(players_data[4:], 2)  # 하위 4명 중 2명 선택
 
-        team1 = top_half + bottom_half  # ✅ 팀1: 상위 4명 중 2명 + 하위 4명 중 2명
+        team1 = top_half + bottom_half  # ✅ 팀1: 상위 2명 + 하위 2명
         team2 = [p for p in players_data if p not in team1]  # ✅ 나머지 4명이 팀2
 
         return team1, team2
 
-    # ✅ 클래스 조합 검증
-    def check_valid_teams(t1, t2):
-        required_classes = {"드", "어", "넥", "슴"}
-        team_classes = set()
-
-        for player in t1 + t2:
-            team_classes.update(player["class"].split(", "))
-
-        return required_classes.issubset(team_classes)
-
-    # ✅ 팀을 최대 10번 생성 시도 (클래스 조합이 유효한지 확인)
     attempts = 0
     valid_teams = False
 
@@ -621,15 +617,126 @@ async def 팀생성(ctx, *, players: str = None):
         attempts += 1
 
     if not valid_teams:
-        await ctx.send("🚨 생성 불가능한 클래스 조합입니다. 다시 시도해주세요!")
+        await ctx.send("🚨 **생성 불가능한 클래스 조합입니다. 다시 시도해주세요!**")
         return
 
-    # ✅ 팀 출력 형식 적용
+    # ✅ 최종 팀 배정 후 메시지 출력
     team1_names = "/".join([p['username'] for p in team1])
     team2_names = "/".join([p['username'] for p in team2])
     msg = f"[아래] {team1_names} vs [위] {team2_names}"
 
     await ctx.send(msg)
 
+def check_valid_teams(t1, t2):
+    required_classes = {"드", "어", "넥", "슴"}  # 필수 클래스
+
+    total_classes = {"드": 0, "어": 0, "넥": 0, "슴": 0}  # 전체 클래스 개수 카운트
+    team1_classes = set()
+    team2_classes = set()
+
+    for player in t1:
+        for cls in player["class"].split(", "):
+            if cls in total_classes:
+                total_classes[cls] += 1
+                team1_classes.add(cls)
+
+    for player in t2:
+        for cls in player["class"].split(", "):
+            if cls in total_classes:
+                total_classes[cls] += 1
+                team2_classes.add(cls)
+
+    # ✅ **전체적으로 모든 클래스가 최소 2개 이상 포함되었는지 확인**
+    if not all(count >= 2 for count in total_classes.values()):
+        return False
+
+    # ✅ **각 팀에서 `드, 어, 넥, 슴`이 최소 1개 이상 포함되어야 함**
+    return required_classes.issubset(team1_classes) and required_classes.issubset(team2_classes)
+
+@bot.command()
+async def 팀생성고급(ctx, *, players: str = None):
+    """
+    ✅ MMR 순위를 기반으로 2 to 1 (1/2, 3/4, 5/6, 7/8) 로 팀을 나눔
+    """
+    if not players:
+        await ctx.send(
+            "※ 해당 명령어는 관리자 전용 입니다. 일반적인 팀생성은 `!팀생성` 명령어를 사용해주세요\n"
+            "팀을 생성할 유저 목록을 입력하세요! (쉼표로 구분, **8명 입력 필수**)"
+        )
+        return
+
+    player_list = [p.strip() for p in players.split(",")]
+
+    if len(player_list) != 8:
+        await ctx.send("🚨 **정확히 8명의 유저를 입력하세요!**")
+        return
+
+    payload = {"action": "getPlayersInfo", "players": player_list}
+    response = requests.post(GAS_URL, json=payload)
+
+    try:
+        data = response.json()
+    except requests.exceptions.JSONDecodeError:
+        await ctx.send(f"🚨 오류: GAS 응답이 JSON 형식이 아닙니다.\n🔍 응답 내용: `{response.text}`")
+        return
+
+    if "error" in data:
+        await ctx.send(f"🚨 {data['error']}")
+        return
+
+    if "players" not in data:
+        await ctx.send(f"🚨 오류: 유저 정보를 가져오지 못했습니다.\n🔍 응답 내용: `{data}`")
+        return
+
+    players_data = data["players"]
+    registered_users = {p['username'] for p in players_data}
+    missing_users = [p for p in player_list if p not in registered_users]
+
+    if missing_users:
+        await ctx.send(f"🚨 등록되지 않은 유저가 포함되어 있습니다: `{', '.join(missing_users)}`")
+        return
+
+    # ✅ MMR 기준 정렬 (내림차순)
+    players_data.sort(key=lambda x: x['mmr'], reverse=True)
+
+    # ✅ MMR 순위에 따른 고정 팀 배정 (2 to 1)
+    possible_combinations = [
+        ([0, 2, 4, 6], [1, 3, 5, 7]),  # (1,3,5,7) vs (2,4,6,8)
+        ([0, 3, 5, 6], [1, 2, 4, 7]),  # (1,4,6,7) vs (2,3,5,8)
+        ([0, 2, 5, 7], [1, 3, 4, 6]),  # (1,3,6,8) vs (2,4,5,7)
+        ([0, 3, 4, 7], [1, 2, 5, 6])   # (1,4,5,8) vs (2,3,6,7)
+    ]
+
+    # ✅ 가능한 모든 팀 조합 중, 클래스 균형이 맞는 조합만 선택
+    valid_combinations = []
+
+    for comb in possible_combinations:
+        t1 = [players_data[i] for i in comb[0]]
+        t2 = [players_data[i] for i in comb[1]]
+
+        if check_valid_teams(t1, t2):
+            valid_combinations.append((t1, t2))
+
+    # ✅ 랜덤하게 팀 조합을 시도 (최대 10번)
+    attempts = 0
+    valid_teams = False
+    team1, team2 = [], []
+
+    while attempts < 10 and valid_combinations:
+        team1, team2 = random.choice(valid_combinations)
+        valid_teams = True
+        break
+
+    # ✅ 유효한 조합이 없으면 실패 메시지 출력
+    if not valid_teams:
+        await ctx.send("🚨 **팀생성 불가능 : 클래스 조합을 확인해주시거나 !팀생성 명령어를 이용해주세요.**")
+        return
+
+    # ✅ 최종 팀 배정 후 메시지 출력
+    team1_names = "/".join([p['username'] for p in team1])
+    team2_names = "/".join([p['username'] for p in team2])
+    msg = f"[아래] {team1_names} vs [위] {team2_names}"
+
+    await ctx.send(msg)
 
 bot.run(TOKEN)
