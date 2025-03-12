@@ -354,27 +354,34 @@ async def validate_and_register(ctx, win_players, lose_players, win_score, lose_
         view=view
     )
 
-
 def parse_match_input(input_text):
     """
-    ✅ 경기 결과 텍스트에서 승리/패배 팀을 추출하는 함수
+    ✅ 경기 결과 텍스트에서 승리/패배 팀을 추출하는 함수 (개선됨)
     """
-    match = re.match(r"\[아래(\d+)](.+?) vs \[위(\d+)](.+)", input_text)
+    match = re.match(r"\[아래(\d+)]\s*(.+?)\s*vs\s*\[위(\d+)]\s*(.+)", input_text)
+
     if not match:
         return None, None, None, None
 
-    win_score = int(match.group(1))  # ✅ 아래팀 점수
-    lose_score = int(match.group(3))  # ✅ 위팀 점수
+    # ✅ 점수 추출
+    below_score = int(match.group(1))  # `[아래]` 팀 점수
+    above_score = int(match.group(3))  # `[위]` 팀 점수
 
-    if win_score > lose_score:
-        win_players = [p.strip() for p in match.group(2).split("/")]
-        lose_players = [p.strip() for p in match.group(4).split("/")]
+    # ✅ 팀원 추출
+    below_players = [p.strip() for p in match.group(2).split("/") if p.strip()]
+    above_players = [p.strip() for p in match.group(4).split("/") if p.strip()]
+
+    # ✅ 예외 처리 (정확히 4명의 플레이어가 있어야 함)
+    if len(below_players) != 4 or len(above_players) != 4:
+        return None, None, None, None  # ❌ 플레이어 수가 4명이 아닐 경우 예외 처리
+
+    # ✅ 점수 비교 후 승패 결정
+    if below_score > above_score:
+        return below_players, above_players, below_score, above_score
+    elif above_score > below_score:
+        return above_players, below_players, above_score, below_score
     else:
-        win_players = [p.strip() for p in match.group(4).split("/")]
-        lose_players = [p.strip() for p in match.group(2).split("/")]
-
-    return win_players, lose_players, win_score, lose_score
-
+        return None, None, None, None  # ❌ 동점일 경우 예외 처리
 
 def format_team(team):
     """
