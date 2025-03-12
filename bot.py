@@ -128,7 +128,7 @@ async def 등록(ctx, username: str = None):
 @bot.command()
 async def 별명등록(ctx, username: str = None, *, aliases: str = None):
     if username and aliases:
-        alias_list = [alias.strip() for alias in aliases.split(",")]  # 쉼표로 별명 분리
+        alias_list = [alias.strip() for alias in re.split(r"[,/]", aliases)]
         payload = {
             "action": "registerAlias",
             "username": username,
@@ -152,7 +152,7 @@ async def 별명등록(ctx, username: str = None, *, aliases: str = None):
         await ctx.send(f"✏️ `{username}` 님의 별명을 입력하세요! (쉼표로 구분, 30초 내 입력)")
 
         msg = await bot.wait_for("message", check=check, timeout=30.0)
-        alias_list = [alias.strip() for alias in msg.content.split(",")]
+        alias_list = [alias.strip() for alias in re.split(r"[,/]", msg.content)]
 
         payload = {
             "action": "registerAlias",
@@ -226,19 +226,21 @@ async def 조회(ctx, username: str = None):
 
     await ctx.send(msg)
 
-
 @bot.command()
 async def 클래스(ctx, username: str = None, *, classes: str = None):
     if username and classes:
-        class_list = [c.strip() for c in classes.split(",")]
+        # 쉼표(`,`)와 슬래시(`/`)를 모두 구분자로 인식, 최종적으로 쉼표(`,`)로 연결하여 저장
+        class_list = [c.strip() for c in re.split(r"[,/]", classes)]
+        formatted_classes = ", ".join(class_list)  # DB 저장용 쉼표 구분 문자열
+
         payload = {
             "action": "registerClass",
             "username": username,
-            "classes": class_list
+            "classes": formatted_classes  # 쉼표(`,`)로 연결된 최종 문자열
         }
-        view = ConfirmView(ctx, payload, f"✅ `{username}` 님의 클래스가 등록되었습니다: {', '.join(class_list)}", "🚨 클래스 등록 요청에 실패했습니다.")
+        view = ConfirmView(ctx, payload, f"✅ `{username}` 님의 클래스가 등록되었습니다: {formatted_classes}", "🚨 클래스 등록 요청에 실패했습니다.")
 
-        await ctx.send(f"🛡 `{username}` 님의 클래스를 `{', '.join(class_list)}` (으)로 등록하시겠습니까?", view=view)
+        await ctx.send(f"🛡 `{username}` 님의 클래스를 `{formatted_classes}` (으)로 등록하시겠습니까?", view=view)
         return
 
     # 대화형 모드
@@ -248,22 +250,25 @@ async def 클래스(ctx, username: str = None, *, classes: str = None):
         msg = await bot.wait_for("message", check=lambda m: m.author == ctx.author, timeout=30.0)
         username = msg.content.strip()
 
-        await ctx.send(f"🛡 `{username}` 님의 클래스를 입력하세요! (쉼표로 구분(예시 : 드,어,넥,슴), 30초 내 입력)")
+        await ctx.send(f"🛡 `{username}` 님의 클래스를 입력하세요! (쉼표 또는 슬래시 구분, 예시: 드,어/넥,슴), 30초 내 입력)")
 
         msg = await bot.wait_for("message", check=lambda m: m.author == ctx.author, timeout=30.0)
-        class_list = [c.strip() for c in msg.content.split(",")]
+
+        class_list = [cls.strip() for cls in re.split(r"[,/]", msg.content)]
+        formatted_classes = ", ".join(class_list)  # 최종 저장 포맷
 
         payload = {
             "action": "registerClass",
             "username": username,
-            "classes": class_list
+            "classes": formatted_classes
         }
-        view = ConfirmView(ctx, payload, f"✅ `{username}` 님의 클래스가 등록되었습니다: {', '.join(class_list)}", "🚨 클래스 등록 요청에 실패했습니다.")
+        view = ConfirmView(ctx, payload, f"✅ `{username}` 님의 클래스가 등록되었습니다: {formatted_classes}", "🚨 클래스 등록 요청에 실패했습니다.")
 
-        await ctx.send(f"🛡 `{username}` 님의 클래스를 `{', '.join(class_list)}` (으)로 등록하시겠습니까?", view=view)
+        await ctx.send(f"🛡 `{username}` 님의 클래스를 `{formatted_classes}` (으)로 등록하시겠습니까?", view=view)
 
     except:
         await ctx.send("⏳ 시간이 초과되었습니다. 다시 `!클래스`를 입력하세요!")
+
 @bot.command()
 async def 결과등록(ctx, *, input_text: str = None):
     """
@@ -272,6 +277,7 @@ async def 결과등록(ctx, *, input_text: str = None):
     if input_text:
         # ✅ 즉시 등록 모드 (명령어 입력 시 바로 실행)
         win_players, lose_players, win_score, lose_score = parse_match_input(input_text)
+
         if win_players is None or lose_players is None:
             await ctx.send(
                 "🚨 **잘못된 형식입니다!**\n"
@@ -279,6 +285,25 @@ async def 결과등록(ctx, *, input_text: str = None):
                 "✅ **순서 주의:** 반드시 `드,어,넥,슴` 클래스 순서대로 입력해야 합니다."
             )
             return
+
+        # ✅ **양 팀 스코어 합이 9를 초과하면 등록 불가**
+        if win_score + lose_score > 9:
+            await ctx.send(
+                f"🚨 **결과 등록 불가** ⚠\n"
+                f"→ `{input_text}`\n"
+                "❌ **양 팀 스코어의 합이 9를 초과하므로, 등록할 수 없습니다!**"
+            )
+            return
+
+        # ✅ **승리 팀 스코어는 무조건 5점이어야 함**
+        if win_score != 5:
+            await ctx.send(
+                f"🚨 **결과 등록 불가** ⚠\n"
+                f"→ `{input_text}`\n"
+                "❌ **승리 팀의 스코어는 반드시 5점이어야 합니다!**"
+            )
+            return
+
         await validate_and_register(ctx, win_players, lose_players, win_score, lose_score)
         return
 
@@ -288,7 +313,6 @@ async def 결과등록(ctx, *, input_text: str = None):
         "예시: `!결과등록 [아래5]유저1,유저2,유저3,유저4 vs [위4]유저5,유저6,유저7,유저8`\n"
         "✅ **순서 주의:** 반드시 `드,어,넥,슴` 클래스 순서대로 입력해야 합니다."
     )
-
 
 async def validate_and_register(ctx, win_players, lose_players, win_score, lose_score):
     """
@@ -547,7 +571,7 @@ async def 도움말(ctx):
         "!삭제 [유저명] - 유저 삭제\n"
         "!조회 [유저명] - 유저 정보 조회\n"
         "!클래스 [유저명] [클래스명] - 유저 클래스 등록\n"
-        "!결과등록 승 [유저1, 유저2, ...] / 패 [유저3, 유저4, ...] - 경기 결과 등록\n"
+        "!결과등록 [아래*]유저1/유저2,... vs [위*]유저1/유저2,...(* = 경기스코어) - 경기 결과 등록\n"
         "!결과조회 [게임번호] - 경기 결과 조회\n"
         "!결과삭제 [게임번호] - 경기 기록 삭제\n"
         "!팀생성 [유저1, 유저2, ...] - 자동 팀 생성\n"
@@ -557,19 +581,23 @@ async def 도움말(ctx):
     )
     await ctx.send(help_text)
 
-import random
-import random
-
 @bot.command()
 async def 팀생성(ctx, *, players: str = None):
     """
     ✅ MMR 순위를 기반으로 1~4등 중 2명, 5~8등 중 2명을 뽑아 팀을 나눔
     """
     if not players:
-        await ctx.send("🚨 팀을 생성할 유저 목록을 입력하세요! (쉼표로 구분, **정확히 8명 입력 필수**)")
-        return
+        await ctx.send("🚨 **팀을 생성할 유저 목록을 입력하세요! (쉼표 또는 슬래시로 구분, 정확히 8명 입력 필수)**\n"
+                       "⏳ **30초 내로 유저명을 입력해주세요!**")
 
-    player_list = [p.strip() for p in players.split(",")]
+        try:
+            msg = await bot.wait_for("message", check=lambda m: m.author == ctx.author, timeout=30.0)
+            players = msg.content.strip()
+        except asyncio.TimeoutError:
+            await ctx.send("⏳ **시간 초과! 다시 `!팀생성` 명령어를 입력하세요.**")
+            return
+
+    player_list = list(set(re.split(r"[,/]", players.strip())))
 
     if len(player_list) != 8:
         await ctx.send("🚨 **정확히 8명의 유저를 입력하세요!**")
@@ -592,17 +620,17 @@ async def 팀생성(ctx, *, players: str = None):
         await ctx.send(f"🚨 오류: 유저 정보를 가져오지 못했습니다.\n🔍 응답 내용: `{data}`")
         return
 
-    # ✅ 디버깅: 응답 상태 코드와 내용 출력
-    print(f"🚀 요청 데이터: {payload}")  # 🔥 요청 내용 확인
-    print(f"🚀 응답 코드: {response.status_code}")  # 🔥 응답 코드 확인
-    print(f"🚀 응답 본문: {response.text}")  # 🔥 응답 내용 확인
-
     players_data = data["players"]
     registered_users = {p['username'] for p in players_data}
     missing_users = [p for p in player_list if p not in registered_users]
 
+    # ✅ **등록되지 않은 유저가 있으면 팀 생성 불가!**
     if missing_users:
-        await ctx.send(f"🚨 등록되지 않은 유저가 포함되어 있습니다: `{', '.join(missing_users)}`")
+        await ctx.send(
+            f"🚨 **팀 생성 불가!** ❌\n"
+            f"⛔ **등록되지 않은 유저**: `{', '.join(missing_users)}`\n"
+            "📌 **해결 방법**: `!등록 [유저명]` 명령어로 유저를 등록한 후 다시 시도해주세요!"
+        )
         return
 
     # ✅ MMR 기준 정렬 (내림차순)
@@ -623,13 +651,15 @@ async def 팀생성(ctx, *, players: str = None):
 
     while attempts < 10:
         team1, team2 = create_balanced_teams()
-        if check_valid_teams(team1, team2):
-            valid_teams = True
-            break
+        valid_teams, error_msg = check_valid_teams(team1, team2)
+
+        if valid_teams:
+            break  # ✅ 팀이 유효하면 반복문 종료
         attempts += 1
 
+    # ✅ **유효한 조합이 없으면 부족한 클래스 메시지 출력**
     if not valid_teams:
-        await ctx.send("🚨 **생성 불가능한 클래스 조합입니다. 다시 시도해주세요!**")
+        await ctx.send(error_msg)  # 🚨 부족한 클래스 안내 메시지 출력
         return
 
     # ✅ 최종 팀 배정 후 메시지 출력
@@ -641,7 +671,6 @@ async def 팀생성(ctx, *, players: str = None):
 
 def check_valid_teams(t1, t2):
     required_classes = {"드", "어", "넥", "슴"}  # 필수 클래스
-
     total_classes = {"드": 0, "어": 0, "넥": 0, "슴": 0}  # 전체 클래스 개수 카운트
     team1_classes = set()
     team2_classes = set()
@@ -658,12 +687,18 @@ def check_valid_teams(t1, t2):
                 total_classes[cls] += 1
                 team2_classes.add(cls)
 
+    # ✅ 부족한 클래스 확인
+    missing_classes = [cls for cls, count in total_classes.items() if count < 2]
+
     # ✅ **전체적으로 모든 클래스가 최소 2개 이상 포함되었는지 확인**
-    if not all(count >= 2 for count in total_classes.values()):
-        return False
+    if missing_classes:
+        return False, f"🚨 **팀 생성 불가!**\n📌 **부족한 클래스:** `{', '.join(missing_classes)}`\n"
 
     # ✅ **각 팀에서 `드, 어, 넥, 슴`이 최소 1개 이상 포함되어야 함**
-    return required_classes.issubset(team1_classes) and required_classes.issubset(team2_classes)
+    if not required_classes.issubset(team1_classes) or not required_classes.issubset(team2_classes):
+        return False, "🚨 **팀 생성 불가! 모든 클래스가 포함되지 않았습니다.**"
+
+    return True, ""  # ✅ 팀 생성 가능
 
 @bot.command()
 async def 팀생성고급(ctx, *, players: str = None):
@@ -672,12 +707,19 @@ async def 팀생성고급(ctx, *, players: str = None):
     """
     if not players:
         await ctx.send(
-            "※ 해당 명령어는 관리자 전용 입니다. 일반적인 팀생성은 `!팀생성` 명령어를 사용해주세요\n"
-            "팀을 생성할 유저 목록을 입력하세요! (쉼표로 구분, **8명 입력 필수**)"
+            "※ **해당 명령어는 관리자 전용 입니다.**\n"
+            "일반적인 팀생성은 `!팀생성` 명령어를 사용해주세요.\n"
+            "📌 **팀을 생성할 유저 목록을 입력하세요!** (쉼표 또는 슬래시 구분, 정확히 8명 입력 필수)"
         )
-        return
 
-    player_list = [p.strip() for p in players.split(",")]
+        try:
+            msg = await bot.wait_for("message", check=lambda m: m.author == ctx.author, timeout=30.0)
+            players = msg.content.strip()
+        except asyncio.TimeoutError:
+            await ctx.send("⏳ **시간 초과! 다시 `!팀생성고급` 명령어를 입력하세요.**")
+            return
+
+    player_list = list(set(re.split(r"[,/]", players.strip())))
 
     if len(player_list) != 8:
         await ctx.send("🚨 **정확히 8명의 유저를 입력하세요!**")
@@ -704,8 +746,13 @@ async def 팀생성고급(ctx, *, players: str = None):
     registered_users = {p['username'] for p in players_data}
     missing_users = [p for p in player_list if p not in registered_users]
 
+    # ✅ **등록되지 않은 유저가 있으면 팀 생성 불가!**
     if missing_users:
-        await ctx.send(f"🚨 등록되지 않은 유저가 포함되어 있습니다: `{', '.join(missing_users)}`")
+        await ctx.send(
+            f"🚨 **팀 생성 불가!** ❌\n"
+            f"⛔ **등록되지 않은 유저**: `{', '.join(missing_users)}`\n"
+            "📌 **해결 방법**: `!등록 [유저명]` 명령어로 유저를 등록한 후 다시 시도해주세요!"
+        )
         return
 
     # ✅ MMR 기준 정렬 (내림차순)
@@ -741,7 +788,7 @@ async def 팀생성고급(ctx, *, players: str = None):
 
     # ✅ 유효한 조합이 없으면 실패 메시지 출력
     if not valid_teams:
-        await ctx.send("🚨 **팀생성 불가능 : 클래스 조합을 확인해주시거나 !팀생성 명령어를 이용해주세요.**")
+        await ctx.send("🚨 **팀 생성 불가! 클래스 조합을 확인해주시거나 `!팀생성` 명령어를 이용해주세요.**")
         return
 
     # ✅ 최종 팀 배정 후 메시지 출력
@@ -750,5 +797,28 @@ async def 팀생성고급(ctx, *, players: str = None):
     msg = f"[아래] {team1_names} vs [위] {team2_names}"
 
     await ctx.send(msg)
+
+@bot.command()
+async def MMR갱신(ctx):
+    """
+    ✅ 모든 플레이어의 MMR을 현재 계수 정보로 다시 계산하는 명령어
+    """
+    await ctx.send("🔄 모든 플레이어의 MMR을 최신 계수 값으로 갱신 중입니다... (잠시만 기다려주세요!)")
+
+    payload = {"action": "updateAllMMR"}
+    response = requests.post(GAS_URL, json=payload)
+
+    try:
+        data = response.json()
+    except requests.exceptions.JSONDecodeError:
+        await ctx.send(f"🚨 오류: GAS 응답이 JSON 형식이 아닙니다.\n🔍 응답 내용: `{response.text}`")
+        return
+
+    if "error" in data:
+        await ctx.send(f"🚨 {data['error']}")
+        return
+
+    await ctx.send(f"✅ 모든 플레이어의 MMR이 갱신되었습니다!")
+
 
 bot.run(TOKEN)
