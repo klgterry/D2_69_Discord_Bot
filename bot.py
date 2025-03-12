@@ -339,7 +339,7 @@ async def validate_and_register(ctx, win_players, lose_players, win_score, lose_
     view = ConfirmView(
         ctx,
         payload,
-        lambda x: f"✅ 경기 결과가 기록되었습니다! **[게임번호: {x}]**\n"
+        lambda x: f"✅ 경기 결과가 기록되었습니다! **[게임번호: {game_number}]**\n"
                   f"🏆 **승리 팀:** {format_team(win_players)} (스코어: {win_score})\n"
                   f"❌ **패배 팀:** {format_team(lose_players)} (스코어: {lose_score})",
         "🚨 경기 등록 요청에 실패했습니다.",
@@ -591,6 +591,11 @@ async def 팀생성(ctx, *, players: str = None):
     if "players" not in data:
         await ctx.send(f"🚨 오류: 유저 정보를 가져오지 못했습니다.\n🔍 응답 내용: `{data}`")
         return
+
+    # ✅ 디버깅: 응답 상태 코드와 내용 출력
+    print(f"🚀 요청 데이터: {payload}")  # 🔥 요청 내용 확인
+    print(f"🚀 응답 코드: {response.status_code}")  # 🔥 응답 코드 확인
+    print(f"🚀 응답 본문: {response.text}")  # 🔥 응답 내용 확인
 
     players_data = data["players"]
     registered_users = {p['username'] for p in players_data}
