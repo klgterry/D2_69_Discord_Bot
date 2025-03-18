@@ -878,7 +878,7 @@ async def 도움말(ctx):
         await ctx.send("🚨 도움말 메시지를 전송하는 중 오류가 발생했습니다!")
 
 @bot.command()
-async def 팀생성(ctx, *, players: str = None):
+async def 팀생성일반(ctx, *, players: str = None):
     """
     ✅ MMR 순위를 기반으로 1~4등 중 2명, 5~8등 중 2명을 뽑아 팀을 나눔
     ✅ 유저명뿐만 아니라 닉네임으로도 팀 생성 가능 (닉네임 → 유저명 변환)
@@ -1300,5 +1300,181 @@ async def 세팅(ctx):
     view.add_item(button)
 
     await ctx.send("🔗 **각 클래스별 세팅을 조회하시려면, 아래 버튼을 클릭해주세요.**", view=view)
+
+import aiohttp
+
+# 로깅 설정
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+class TeamGenerationView(discord.ui.View):
+    def __init__(self, ctx, players):
+        super().__init__()
+        self.ctx = ctx
+        self.players = players
+        self.team1 = []
+        self.team2 = []
+        self.message = None  # ✅ 기존 메시지를 저장할 변수 추가
+        self.status_message = None  # ✅ "팀 생성 중..." 메시지 저장 변수
+
+    async def get_player_data(self):
+        """GAS에서 유저 정보 가져오기 (비동기 방식)"""
+        payload = {"action": "getPlayersInfo", "players": self.players}
+        logging.info(f"📡 [GAS 요청] 유저 정보 요청: {payload}")
+
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.post(GAS_URL, json=payload, timeout=5) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        logging.info(f"✅ [GAS 응답] 성공: {data}")
+                        return data
+                    else:
+                        logging.warning(f"⚠ [GAS 응답] 실패 (상태 코드: {response.status})")
+                        await self.ctx.send(f"🚨 GAS 응답 오류: 상태 코드 {response.status}")
+                        return None
+            except Exception as e:
+                logging.error(f"🚨 GAS 요청 실패: {e}")
+                await self.ctx.send(f"🚨 GAS 요청 중 오류 발생: {e}")
+                return None
+
+    def generate_teams(self, players_data):
+        """MMR 기반 팀 생성 (일반 방식)"""
+        players_data.sort(key=lambda x: x["mmr"], reverse=True)  # MMR 정렬
+        logging.info(f"📊 [MMR 정렬] 유저 데이터: {[(p['username'], p['mmr']) for p in players_data]}")
+
+        top_half = random.sample(players_data[:4], 2)
+        bottom_half = random.sample(players_data[4:], 2)
+        self.team1 = top_half + bottom_half
+        self.team2 = [p for p in players_data if p not in self.team1]
+
+        logging.info(f"🔴 [팀1] {self.team1}")
+        logging.info(f"🔵 [팀2] {self.team2}")
+
+    def generate_teams_advanced(self, players_data):
+        """MMR 기반 팀 생성 (고급 방식)"""
+        players_data.sort(key=lambda x: x["mmr"], reverse=True)
+        logging.info(f"📊 [고급 MMR 정렬] 유저 데이터: {[(p['username'], p['mmr']) for p in players_data]}")
+
+        possible_combinations = [
+            ([0, 2, 4, 6], [1, 3, 5, 7]),
+            ([0, 3, 5, 6], [1, 2, 4, 7]),
+            ([0, 2, 5, 7], [1, 3, 4, 6]),
+            ([0, 3, 4, 7], [1, 2, 5, 6])
+        ]
+
+        attempts = 0
+        while attempts < 10:
+            team1_idx, team2_idx = random.choice(possible_combinations)
+            self.team1 = [players_data[i] for i in team1_idx]
+            self.team2 = [players_data[i] for i in team2_idx]
+
+            logging.info(f"🎲 [고급 랜덤 배정 시도 {attempts + 1}] 팀1: {self.team1}, 팀2: {self.team2}")
+            return
+
+        logging.warning("🚨 [고급 팀 생성 실패] 유효한 조합을 찾지 못함")
+        self.ctx.send("🚨 **팀 생성 실패! 유효한 조합을 찾을 수 없습니다.**")
+
+    @discord.ui.button(label="MIX!", style=discord.ButtonStyle.green)
+    async def mix_teams(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """일반 MMR 기반 팀 생성"""
+        await interaction.response.defer()
+        self.disable_buttons()  # ✅ 버튼 비활성화
+        await self.update_status_message("⏳ **팀을 생성 중입니다...**")  # ✅ "팀 생성 중..." 메시지 표시
+
+        data = await self.get_player_data()
+        if not data or "players" not in data:
+            self.enable_buttons()  # ✅ 서버 응답 실패 시 버튼 다시 활성화
+            return
+
+        self.generate_teams(data["players"])
+
+        result_msg = f"""🏆 **MMR 기반 팀 생성 결과 (일반)** 🏆
+
+        🔴 **아랫팀:** {', '.join([p['username'] for p in self.team1])}
+        🔵 **윗팀:** {', '.join([p['username'] for p in self.team2])}
+
+        🎮 경기 준비 완료!"""
+
+        await self.update_status_message(result_msg)  # ✅ 기존 메시지 업데이트
+
+        self.enable_buttons()  # ✅ 서버 응답 완료 후 버튼 다시 활성화
+
+    @discord.ui.button(label="MIX!(고급)", style=discord.ButtonStyle.blurple)
+    async def mix_teams_advanced(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """고급 MMR 기반 팀 생성"""
+        await interaction.response.defer()
+        await self.update_status_message("⏳ **팀(고급)을 생성 중입니다...**")  # ✅ "팀 생성 중..." 메시지 표시
+        self.disable_buttons()  # ✅ 버튼 비활성화
+
+        data = await self.get_player_data()
+        if not data or "players" not in data:
+            self.enable_buttons()  # ✅ 서버 응답 실패 시 버튼 다시 활성화
+            return
+
+        self.generate_teams_advanced(data["players"])
+
+        result_msg = f"""🏆 **MMR 기반 팀 생성 결과 (고급)** 🏆
+
+        🔴 **아랫팀:** {', '.join([p['username'] for p in self.team1])}
+        🔵 **윗팀:** {', '.join([p['username'] for p in self.team2])}
+
+        🎮 경기 준비 완료!"""
+        await self.update_status_message(result_msg)  # ✅ 기존 메시지 업데이트
+
+        self.enable_buttons()  # ✅ 서버 응답 완료 후 버튼 다시 활성화
+
+    @discord.ui.button(label="생성결과 복사", style=discord.ButtonStyle.gray)
+    async def copy_results(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """생성된 팀 결과를 복사"""
+        if not self.team1 or not self.team2:
+            await interaction.response.send_message("❌ **MIX 버튼을 눌러 팀을 먼저 생성하세요!**", ephemeral=True)
+            return
+
+        try:
+            result_text = f"[아래]{'/'.join([p['username'] for p in self.team1])} vs [위]{'/'.join([p['username'] for p in self.team2])}"
+            await interaction.response.send_message(f"📋 **생성 결과가 복사되었습니다!**\n```{result_text}```", ephemeral=True)
+        except Exception as e:
+            logging.error(f"🚨 [복사 오류] {e}")
+            await interaction.response.send_message(f"🚨 오류 발생: {e}", ephemeral=True)
+
+    def disable_buttons(self):
+        """버튼을 비활성화 (서버 응답 대기 중)"""
+        for child in self.children:
+            child.disabled = True
+        if self.message:
+            asyncio.create_task(self.message.edit(view=self))
+
+    def enable_buttons(self):
+        """버튼을 다시 활성화 (서버 응답 완료 후)"""
+        for child in self.children:
+            child.disabled = False
+        if self.message:
+            asyncio.create_task(self.message.edit(view=self))
+
+    async def update_status_message(self, content):
+        """상태 메시지 업데이트 (팀 생성 중 → 결과 표시)"""
+        if self.status_message:
+            await self.status_message.edit(content=content)
+        else:
+            self.status_message = await self.ctx.send(content)
+
+
+@bot.command()
+async def 팀생성(ctx, *, players: str = None):
+    """팀 생성 명령어"""
+    logging.info(f"🚀 [팀생성 명령어 실행] 입력된 플레이어: {players}")
+
+    if not players:
+        await ctx.send("🚨 **8명의 유저를 입력하세요! (쉼표 또는 슬래시로 구분)**")
+        return
+
+    player_list = list(set(re.split(r"[,/]", players.strip())))
+    if len(player_list) != 8:
+        await ctx.send("🚨 **정확히 8명의 유저를 입력해야 합니다!**")
+        return
+
+    view = TeamGenerationView(ctx, player_list)
+    message = await ctx.send("🔄 **팀을 생성할 방식을 선택하세요!**", view=view)
+    view.message = message  # ✅ 첫 번째 메시지를 저장하여 이후 MIX 버튼 클릭 시 업데이트 가능
 
 bot.run(TOKEN)
