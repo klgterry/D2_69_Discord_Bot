@@ -115,6 +115,13 @@ import re
 
 import logging
 
+# ✅ 허용할 특정 유저 ID 목록 (서버 주인 외 추가 관리자)
+ALLOWED_USER_IDS = {123456789012345678, 987654321098765432}  # 원하는 유저 ID 추가
+
+def is_allowed_user(ctx):
+    """✅ 명령어를 사용할 수 있는 유저인지 확인하는 함수"""
+    return ctx.author.id in ALLOWED_USER_IDS or ctx.author.id == ctx.guild.owner_id  # 서버 주인 포함
+
 @bot.command()
 async def 등록(ctx, username: str = None, classname: str = None, *, nickname: str = None):
     """
@@ -218,7 +225,10 @@ async def 등록(ctx, username: str = None, classname: str = None, *, nickname: 
 
 @bot.command()
 async def 별명등록(ctx, username: str = None, *, aliases: str = None):
-    """유저의 별명을 등록하는 명령어"""
+    """유저의 별명을 등록하는 명령어 (서버 주인 + 특정 유저만 가능)"""
+    if not is_allowed_user(ctx):
+        await ctx.send(f"🚫 `{ctx.author.display_name}` 님은 이 명령어를 사용할 수 없습니다! 702702 01 240826 국민 조민형 입금 후 변경 문의")
+        return
 
     logging.basicConfig(level=logging.INFO)
     logging.info(f"🚀 [별명등록 명령어 실행] username: {username}, aliases: {aliases}")
@@ -862,7 +872,7 @@ async def 도움말(ctx):
         "\"!팀생성 [유저1, 유저2, ...]\" - 🤝 자동 팀 생성\n"
         "\"!팀생성고급 [유저1, 유저2, ...]\" - 🔒 자동 팀 생성 (관리자 전용)\n"
         "\"!MMR갱신\" - 🔄 전체 유저의 MMR 갱신 (관리자 전용)\n"
-        "\"!홈페이지\" - 🌐 전적 기록실 이동\n"
+        "\"!홈페이지\" - 🌐 내전 기록실 이동\n"
         "\"!세팅\" - 🔧 캐릭터별 세팅 정보 보기\n"
         "\"!도움말\" - 📜 명령어 목록 확인\n"
         "```"
@@ -1204,6 +1214,11 @@ async def 별명삭제(ctx, username: str = None):
     - `!별명삭제` → 유저명을 입력받아서 별명을 삭제
     ✅ 디버깅 로그 추가됨
     """
+
+    if not is_allowed_user(ctx):
+        await ctx.send(f"🚫 `{ctx.author.display_name}` 님은 이 명령어를 사용할 수 없습니다! 702702 01 240826 국민 조민형 입금 후 변경 문의")
+        return
+
     import logging
     logging.basicConfig(level=logging.INFO)
 
@@ -1283,12 +1298,12 @@ async def 별명삭제(ctx, username: str = None):
 
 @bot.command(aliases=["홈피", "웹페이지", "웹"])
 async def 홈페이지(ctx):
-    """전적 기록실 웹페이지로 이동하는 버튼 제공"""
+    """내전 기록실 웹페이지로 이동하는 버튼 제공"""
     view = discord.ui.View()
-    button = discord.ui.Button(label="📊 [전적 기록실 이동]", url="https://my-d2-league.vercel.app/", style=discord.ButtonStyle.link)
+    button = discord.ui.Button(label="📊 [내전 기록실 이동]", url="https://69dia.vercel.app/", style=discord.ButtonStyle.link)
     view.add_item(button)
 
-    await ctx.send("🔗 **전적 기록실 웹페이지로 이동하려면 버튼을 클릭해주세요.**", view=view)
+    await ctx.send("🔗 **내전 기록실 웹페이지로 이동하려면 버튼을 클릭해주세요.**", view=view)
 
 
 @bot.command(aliases=["셋팅"])
@@ -1307,10 +1322,11 @@ import aiohttp
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 class TeamGenerationView(discord.ui.View):
-    def __init__(self, ctx, players):
+    def __init__(self, ctx, players, parsed_classes):
         super().__init__()
         self.ctx = ctx
         self.players = players
+        self.parsed_players = parsed_classes
         self.team1 = []
         self.team2 = []
         self.message = None  # ✅ 기존 메시지를 저장할 변수 추가
@@ -1339,8 +1355,29 @@ class TeamGenerationView(discord.ui.View):
 
     def generate_teams(self, players_data):
         """MMR 기반 팀 생성 (일반 방식)"""
-        players_data.sort(key=lambda x: x["mmr"], reverse=True)  # MMR 정렬
-        logging.info(f"📊 [MMR 정렬] 유저 데이터: {[(p['username'], p['mmr']) for p in players_data]}")
+
+        for p in players_data:
+            preferred = self.parsed_players.get(p["username"])  # 예: ["드", "넥"]
+            if preferred:
+                mmrs = []
+                for c in preferred:
+                    key = {
+                        "드": "mmrD",
+                        "어": "mmrA",
+                        "넥": "mmrN",
+                        "슴": "mmrS"
+                    }.get(c)
+                    if key and key in p:
+                        mmrs.append(p[key])
+                if mmrs:
+                    p["effective_mmr"] = sum(mmrs) / len(mmrs)
+                else:
+                    p["effective_mmr"] = p["mmr"]
+            else:
+                p["effective_mmr"] = p["mmr"]
+
+        players_data.sort(key=lambda x: x["effective_mmr"], reverse=True)  # MMR 정렬
+        logging.info(f"📊 [MMR 정렬] 유저 데이터: {[(p['username'], p['effective_mmr']) for p in players_data]}")
 
         top_half = random.sample(players_data[:4], 2)
         bottom_half = random.sample(players_data[4:], 2)
@@ -1388,12 +1425,88 @@ class TeamGenerationView(discord.ui.View):
 
         self.generate_teams(data["players"])
 
+        logging.info(f"🔄 팀1 최종 포지션(랜덤 배치 전): {self.team1}")
+        logging.info(f"🔄 팀2 최종 포지션(랜덤 배치 전): {self.team2}")
+
+        # ✅ 팀 내 포지션 랜덤 배치
+        def shuffle_team_roles(team):
+            positions = ["드", "어", "넥", "슴"]
+            random.shuffle(positions)
+            shuffled_team = []
+            assigned_players = set()
+
+            logging.info("🔄 [클래스 배정 시작] 팀 구성원: %s", [p["username"] for p in team])
+            logging.info("🔀 [포지션 셔플 결과] %s", positions)
+
+            # 1. 유저 지정 클래스 우선 배정
+            for position in positions:
+                for p in team:
+                    username = p["username"]
+                    if username in assigned_players:
+                        continue
+
+                    preferred = self.parsed_players.get(username)
+                    if preferred and position in preferred:
+                        shuffled_team.append({
+                            "username": username,
+                            "class": position
+                        })
+                        assigned_players.add(username)
+                        logging.info("✅ [지정 클래스 배정] %s → %s", username, position)
+                        break  # 해당 포지션에 한 명만 배정
+
+            # 2. 나머지 유저를 가능한 포지션에 랜덤 배정
+            for position in positions:
+                if any(member["class"] == position for member in shuffled_team):
+                    continue  # 이미 배정된 포지션이면 skip
+
+                available_players = []
+                for p in team:
+                    username = p["username"]
+                    if username in assigned_players:
+                        continue
+
+                    actual_classes = p.get("class", "").split(", ")
+                    if position in actual_classes:
+                        available_players.append(p)
+
+                if available_players:
+                    selected = random.choice(available_players)
+                    shuffled_team.append({
+                        "username": selected["username"],
+                        "class": position
+                    })
+                    assigned_players.add(selected["username"])
+                    logging.info("🌀 [자동 배정] %s → %s", selected["username"], position)
+                else:
+                    logging.warning("⚠️ [포지션 미배정] %s 포지션에 적합한 유저 없음", position)
+
+            logging.info("🏁 [최종 클래스 배정 결과] %s", shuffled_team)
+
+            # ✅ 정렬 추가
+            position_order = {"드": 0, "어": 1, "넥": 2, "슴": 3}
+            shuffled_team.sort(key=lambda x: position_order.get(x["class"], 99))
+
+            logging.info("🏁 [최종 클래스 배정 결과(정렬)] %s", shuffled_team)
+
+            return shuffled_team
+
+        team1 = shuffle_team_roles(self.team1)
+        team2 = shuffle_team_roles(self.team2)
+
+        logging.info(f"🔄 팀1 최종 포지션: {team1}")
+        logging.info(f"🔄 팀2 최종 포지션: {team2}")
+
+        result_text = f"[아래]{'/'.join([p['username'] for p in team1])} vs [위]{'/'.join([p['username'] for p in team2])}"
+
         result_msg = f"""🏆 **MMR 기반 팀 생성 결과 (일반)** 🏆
 
-        🔴 **아랫팀:** {', '.join([p['username'] for p in self.team1])}
-        🔵 **윗팀:** {', '.join([p['username'] for p in self.team2])}
+        🔴 **아랫팀:** {', '.join([p['username'] for p in team1])}
+        🔵 **윗팀:** {', '.join([p['username'] for p in team2])}
 
-        🎮 경기 준비 완료!"""
+        🎮 경기 준비 완료!
+        
+    {result_text}"""
 
         await self.update_status_message(result_msg)  # ✅ 기존 메시지 업데이트
 
@@ -1413,29 +1526,90 @@ class TeamGenerationView(discord.ui.View):
 
         self.generate_teams_advanced(data["players"])
 
+        logging.info(f"🔄 팀1 최종 포지션(랜덤 배치 전): {self.team1}")
+        logging.info(f"🔄 팀2 최종 포지션(랜덤 배치 전): {self.team2}")
+
+        def shuffle_team_roles(team):
+            positions = ["드", "어", "넥", "슴"]
+            random.shuffle(positions)
+            shuffled_team = []
+            assigned_players = set()
+
+            logging.info("🔄 [클래스 배정 시작] 팀 구성원: %s", [p["username"] for p in team])
+            logging.info("🔀 [포지션 셔플 결과] %s", positions)
+
+            # 1. 유저 지정 클래스 우선 배정
+            for position in positions:
+                for p in team:
+                    username = p["username"]
+                    if username in assigned_players:
+                        continue
+
+                    preferred = self.parsed_players.get(username)
+                    if preferred and position in preferred:
+                        shuffled_team.append({
+                            "username": username,
+                            "class": position
+                        })
+                        assigned_players.add(username)
+                        logging.info("✅ [지정 클래스 배정] %s → %s", username, position)
+                        break  # 해당 포지션에 한 명만 배정
+
+            # 2. 나머지 유저를 가능한 포지션에 랜덤 배정
+            for position in positions:
+                if any(member["class"] == position for member in shuffled_team):
+                    continue  # 이미 배정된 포지션이면 skip
+
+                available_players = []
+                for p in team:
+                    username = p["username"]
+                    if username in assigned_players:
+                        continue
+
+                    actual_classes = p.get("class", "").split(", ")
+                    if position in actual_classes:
+                        available_players.append(p)
+
+                if available_players:
+                    selected = random.choice(available_players)
+                    shuffled_team.append({
+                        "username": selected["username"],
+                        "class": position
+                    })
+                    assigned_players.add(selected["username"])
+                    logging.info("🌀 [자동 배정] %s → %s", selected["username"], position)
+                else:
+                    logging.warning("⚠️ [포지션 미배정] %s 포지션에 적합한 유저 없음", position)
+
+            logging.info("🏁 [최종 클래스 배정 결과] %s", shuffled_team)
+
+            # ✅ 정렬 추가
+            position_order = {"드": 0, "어": 1, "넥": 2, "슴": 3}
+            shuffled_team.sort(key=lambda x: position_order.get(x["class"], 99))
+
+            logging.info("🏁 [최종 클래스 배정 결과(정렬)] %s", shuffled_team)
+
+            return shuffled_team
+
+            return shuffled_team
+
+        team1 = shuffle_team_roles(self.team1)
+        team2 = shuffle_team_roles(self.team2)
+
+        result_text = f"[아래]{'/'.join([p['username'] for p in team1])} vs [위]{'/'.join([p['username'] for p in team2])}"
+
         result_msg = f"""🏆 **MMR 기반 팀 생성 결과 (고급)** 🏆
 
-        🔴 **아랫팀:** {', '.join([p['username'] for p in self.team1])}
-        🔵 **윗팀:** {', '.join([p['username'] for p in self.team2])}
+        🔴 **아랫팀:** {', '.join([p['username'] for p in team1])}
+        🔵 **윗팀:** {', '.join([p['username'] for p in team2])}
+    
+        🎮 경기 준비 완료!
+    
+    {result_text}"""
 
-        🎮 경기 준비 완료!"""
         await self.update_status_message(result_msg)  # ✅ 기존 메시지 업데이트
 
         self.enable_buttons()  # ✅ 서버 응답 완료 후 버튼 다시 활성화
-
-    @discord.ui.button(label="생성결과 복사", style=discord.ButtonStyle.gray)
-    async def copy_results(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """생성된 팀 결과를 복사"""
-        if not self.team1 or not self.team2:
-            await interaction.response.send_message("❌ **MIX 버튼을 눌러 팀을 먼저 생성하세요!**", ephemeral=True)
-            return
-
-        try:
-            result_text = f"[아래]{'/'.join([p['username'] for p in self.team1])} vs [위]{'/'.join([p['username'] for p in self.team2])}"
-            await interaction.response.send_message(f"📋 **생성 결과가 복사되었습니다!**\n```{result_text}```", ephemeral=True)
-        except Exception as e:
-            logging.error(f"🚨 [복사 오류] {e}")
-            await interaction.response.send_message(f"🚨 오류 발생: {e}", ephemeral=True)
 
     def disable_buttons(self):
         """버튼을 비활성화 (서버 응답 대기 중)"""
@@ -1469,11 +1643,68 @@ async def 팀생성(ctx, *, players: str = None):
         return
 
     player_list = list(set(re.split(r"[,/]", players.strip())))
+    player_list = re.findall(r"[^\s,()/]+(?:\([^\)]+\))?", players.strip())
+
+    logging.info(f"🎯 입력된 유저 리스트: {player_list}")
+
+    parsed_players = {}
+
+    for p in player_list:
+        p = p.strip()
+        match = re.match(r"^([^\(]+)\(([^)]+)\)$", p)
+        if match:
+            username, class_override = match.groups()
+            parsed_players[username.strip()] = [c.strip() for c in class_override.split(",")]
+            logging.info(f"🔍 클래스 지정됨: {username.strip()} → {parsed_players[username.strip()]}")
+        else:
+            parsed_players[p] = None
+            logging.info(f"ℹ️ 클래스 미지정: {p}")
+
+    logging.info(f"🔍 [유저 입력 파싱 완료] {parsed_players}")
+
+    player_list = list(parsed_players.keys())
+
     if len(player_list) != 8:
         await ctx.send("🚨 **정확히 8명의 유저를 입력해야 합니다!**")
         return
 
-    view = TeamGenerationView(ctx, player_list)
+    # ✅ GAS에서 유저명 & 닉네임 데이터 가져오기
+    response = requests.get(f"{GAS_URL}?action=getUsersAndAliases")
+    try:
+        data = response.json()
+        if "error" in data:
+            await ctx.send(f"🚨 오류: {data['error']}")
+            return
+    except requests.exceptions.JSONDecodeError:
+        await ctx.send(f"🚨 오류: GAS 응답이 JSON 형식이 아닙니다.\n🔍 응답 내용: `{response.text}`")
+        return
+
+    # ✅ 유저명 & 닉네임 매핑 정보
+    username_list = data.get("users", [])  # ✅ 유저명 리스트
+    alias_map = {alias: user for user, aliases in data.get("aliases", {}).items() for alias in
+                 aliases}  # 닉네임 → 유저명 매핑
+
+    # ✅ 입력한 값들을 유저명으로 변환
+    converted_players = []
+    unknown_players = []
+    for p in player_list:
+        if p in username_list:
+            converted_players.append(p)  # ✅ 원래 유저명 그대로 사용
+        elif p in alias_map:
+            converted_players.append(alias_map[p])  # ✅ 닉네임 → 유저명 변환
+            logging.info(f"🔄 닉네임 `{p}` → 유저명 `{alias_map[p]}` 변환 완료")
+        else:
+            unknown_players.append(p)  # ❌ 찾을 수 없는 유저
+
+    logging.info(f"🎯 **최종 변환된 유저 리스트:** {converted_players}")
+    logging.info(f"🚨 **등록되지 않은 유저:** {unknown_players}")
+
+    if len(converted_players) != 8:
+        await ctx.send(f"🚨 **팀 생성 불가! 정확히 8명의 유저를 입력해야 합니다!**\n"
+                       f"❌ **등록되지 않은 유저:** `{', '.join(unknown_players)}`")
+        return
+
+    view = TeamGenerationView(ctx, converted_players, parsed_players)
     message = await ctx.send("🔄 **팀을 생성할 방식을 선택하세요!**", view=view)
     view.message = message  # ✅ 첫 번째 메시지를 저장하여 이후 MIX 버튼 클릭 시 업데이트 가능
 
