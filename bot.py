@@ -1389,7 +1389,28 @@ class TeamGenerationView(discord.ui.View):
 
     def generate_teams_advanced(self, players_data):
         """MMR 기반 팀 생성 (고급 방식)"""
-        players_data.sort(key=lambda x: x["mmr"], reverse=True)
+        for p in players_data:
+            preferred = self.parsed_players.get(p["username"])  # 예: ["드", "넥"]
+            if preferred:
+                mmrs = []
+                for c in preferred:
+                    key = {
+                        "드": "mmrD",
+                        "어": "mmrA",
+                        "넥": "mmrN",
+                        "슴": "mmrS"
+                    }.get(c)
+                    if key and key in p:
+                        mmrs.append(p[key])
+                if mmrs:
+                    p["effective_mmr"] = sum(mmrs) / len(mmrs)
+                else:
+                    p["effective_mmr"] = p["mmr"]
+            else:
+                p["effective_mmr"] = p["mmr"]
+
+        players_data.sort(key=lambda x: x["effective_mmr"], reverse=True)  # MMR 정렬
+
         logging.info(f"📊 [고급 MMR 정렬] 유저 데이터: {[(p['username'], p['mmr']) for p in players_data]}")
 
         possible_combinations = [
@@ -1431,6 +1452,7 @@ class TeamGenerationView(discord.ui.View):
         # ✅ 팀 내 포지션 랜덤 배치
         def shuffle_team_roles(team):
             positions = ["드", "어", "넥", "슴"]
+            random.shuffle(positions)
             random.shuffle(positions)
             shuffled_team = []
             assigned_players = set()
@@ -1531,6 +1553,7 @@ class TeamGenerationView(discord.ui.View):
 
         def shuffle_team_roles(team):
             positions = ["드", "어", "넥", "슴"]
+            random.shuffle(positions)
             random.shuffle(positions)
             shuffled_team = []
             assigned_players = set()
