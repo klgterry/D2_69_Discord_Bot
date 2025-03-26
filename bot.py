@@ -1321,6 +1321,19 @@ import aiohttp
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+
+def has_sufficient_classes(players_data):
+    class_counts = {"드": 0, "어": 0, "넥": 0, "슴": 0}
+    for player in players_data:
+        actual_classes = player.get("class", "").split(", ")
+        for cls in actual_classes:
+            if cls in class_counts:
+                class_counts[cls] += 1
+
+    logging.info(f"📊 [클래스 분포] {class_counts}")
+    insufficient = [cls for cls, count in class_counts.items() if count < 2]
+    return (len(insufficient) == 0), insufficient
+
 class TeamGenerationView(discord.ui.View):
     def __init__(self, ctx, players, parsed_classes):
         super().__init__()
@@ -1355,6 +1368,13 @@ class TeamGenerationView(discord.ui.View):
 
     def generate_teams(self, players_data):
         """MMR 기반 팀 생성 (일반 방식)"""
+        sufficient, lacking = has_sufficient_classes(players_data)
+        if not sufficient:
+            error_msg = f"🚨 클래스별 2명 이상 필요: 부족한 클래스 → {', '.join(lacking)}"
+            asyncio.create_task(self.status_message.edit(content=error_msg))
+            logging.warning(f"❌ [클래스 부족] {error_msg}")
+            return
+
 
         for p in players_data:
             preferred = self.parsed_players.get(p["username"])  # 예: ["드", "넥"]
@@ -1389,6 +1409,14 @@ class TeamGenerationView(discord.ui.View):
 
     def generate_teams_advanced(self, players_data):
         """MMR 기반 팀 생성 (고급 방식)"""
+
+        sufficient, lacking = has_sufficient_classes(players_data)
+        if not sufficient:
+            error_msg = f"🚨 클래스별 2명 이상 필요: 부족한 클래스 → {', '.join(lacking)}"
+            asyncio.create_task(self.status_message.edit(content=error_msg))
+            logging.warning(f"❌ [클래스 부족] {error_msg}")
+            return
+
         for p in players_data:
             preferred = self.parsed_players.get(p["username"])  # 예: ["드", "넥"]
             if preferred:
@@ -1444,11 +1472,6 @@ class TeamGenerationView(discord.ui.View):
             self.enable_buttons()  # ✅ 서버 응답 실패 시 버튼 다시 활성화
             return
 
-        self.generate_teams(data["players"])
-
-        logging.info(f"🔄 팀1 최종 포지션(랜덤 배치 전): {self.team1}")
-        logging.info(f"🔄 팀2 최종 포지션(랜덤 배치 전): {self.team2}")
-
         # ✅ 팀 내 포지션 랜덤 배치
         def shuffle_team_roles(team):
             positions = ["드", "어", "넥", "슴"]
@@ -1502,6 +1525,7 @@ class TeamGenerationView(discord.ui.View):
                     logging.info("🌀 [자동 배정] %s → %s", selected["username"], position)
                 else:
                     logging.warning("⚠️ [포지션 미배정] %s 포지션에 적합한 유저 없음", position)
+                    return False
 
             logging.info("🏁 [최종 클래스 배정 결과] %s", shuffled_team)
 
@@ -1513,8 +1537,22 @@ class TeamGenerationView(discord.ui.View):
 
             return shuffled_team
 
-        team1 = shuffle_team_roles(self.team1)
-        team2 = shuffle_team_roles(self.team2)
+        max_attempts = 10
+        for attempt in range(max_attempts):
+            self.generate_teams(data["players"])
+
+            logging.info(f"🔄 팀1 최종 포지션(랜덤 배치 전): {self.team1}")
+            logging.info(f"🔄 팀2 최종 포지션(랜덤 배치 전): {self.team2}")
+
+            team1 = shuffle_team_roles(self.team1)
+            team2 = shuffle_team_roles(self.team2)
+
+            if team1 and team2:
+                break
+            elif attempt == max_attempts - 1:
+                await self.update_status_message("🚨 팀 생성 실패: 포지션 배정이 불가능한 조합입니다.")
+                self.enable_buttons()
+                return
 
         logging.info(f"🔄 팀1 최종 포지션: {team1}")
         logging.info(f"🔄 팀2 최종 포지션: {team2}")
@@ -1545,11 +1583,6 @@ class TeamGenerationView(discord.ui.View):
         if not data or "players" not in data:
             self.enable_buttons()  # ✅ 서버 응답 실패 시 버튼 다시 활성화
             return
-
-        self.generate_teams_advanced(data["players"])
-
-        logging.info(f"🔄 팀1 최종 포지션(랜덤 배치 전): {self.team1}")
-        logging.info(f"🔄 팀2 최종 포지션(랜덤 배치 전): {self.team2}")
 
         def shuffle_team_roles(team):
             positions = ["드", "어", "넥", "슴"]
@@ -1603,6 +1636,7 @@ class TeamGenerationView(discord.ui.View):
                     logging.info("🌀 [자동 배정] %s → %s", selected["username"], position)
                 else:
                     logging.warning("⚠️ [포지션 미배정] %s 포지션에 적합한 유저 없음", position)
+                    return False
 
             logging.info("🏁 [최종 클래스 배정 결과] %s", shuffled_team)
 
@@ -1614,10 +1648,22 @@ class TeamGenerationView(discord.ui.View):
 
             return shuffled_team
 
-            return shuffled_team
+        max_attempts = 10
+        for attempt in range(max_attempts):
+            self.generate_teams_advanced(data["players"])
 
-        team1 = shuffle_team_roles(self.team1)
-        team2 = shuffle_team_roles(self.team2)
+            logging.info(f"🔄 팀1 최종 포지션(랜덤 배치 전): {self.team1}")
+            logging.info(f"🔄 팀2 최종 포지션(랜덤 배치 전): {self.team2}")
+
+            team1 = shuffle_team_roles(self.team1)
+            team2 = shuffle_team_roles(self.team2)
+
+            if team1 and team2:
+                break
+            elif attempt == max_attempts - 1:
+                await self.update_status_message("🚨 팀 생성 실패: 포지션 배정이 불가능한 조합입니다.")
+                self.enable_buttons()
+                return
 
         result_text = f"[아래]{'/'.join([p['username'] for p in team1])} vs [위]{'/'.join([p['username'] for p in team2])}"
 
