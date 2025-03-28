@@ -1475,13 +1475,38 @@ class TeamGenerationView(discord.ui.View):
         # ✅ 팀 내 포지션 랜덤 배치
         def shuffle_team_roles(team):
             positions = ["드", "어", "넥", "슴"]
+
             random.shuffle(positions)
+            logging.info(f"🔀 [셔플 1회차] {positions}")
+
             random.shuffle(positions)
+            logging.info(f"🔀 [셔플 2회차] {positions}")
+
+            random.shuffle(positions)
+            logging.info(f"🔀 [셔플 3회차] {positions}")
+
             shuffled_team = []
             assigned_players = set()
 
             logging.info("🔄 [클래스 배정 시작] 팀 구성원: %s", [p["username"] for p in team])
             logging.info("🔀 [포지션 셔플 결과] %s", positions)
+
+            # 1. 단일 지정 클래스 우선 배정
+            for position in positions:
+                for p in team:
+                    username = p["username"]
+                    if username in assigned_players:
+                        continue
+
+                    preferred = self.parsed_players.get(username)
+                    if preferred and len(preferred) == 1 and preferred[0] == position:
+                        shuffled_team.append({
+                            "username": username,
+                            "class": position
+                        })
+                        assigned_players.add(username)
+                        logging.info("🔒 [단일 지정 고정 배정] %s → %s", username, position)
+                        break
 
             # 1. 유저 지정 클래스 우선 배정
             for position in positions:
@@ -1586,13 +1611,38 @@ class TeamGenerationView(discord.ui.View):
 
         def shuffle_team_roles(team):
             positions = ["드", "어", "넥", "슴"]
+
             random.shuffle(positions)
+            logging.info(f"🔀 [셔플 1회차] {positions}")
+
             random.shuffle(positions)
+            logging.info(f"🔀 [셔플 2회차] {positions}")
+
+            random.shuffle(positions)
+            logging.info(f"🔀 [셔플 3회차] {positions}")
+
             shuffled_team = []
             assigned_players = set()
 
             logging.info("🔄 [클래스 배정 시작] 팀 구성원: %s", [p["username"] for p in team])
             logging.info("🔀 [포지션 셔플 결과] %s", positions)
+
+            # 1. 단일 지정 클래스 우선 배정
+            for position in positions:
+                for p in team:
+                    username = p["username"]
+                    if username in assigned_players:
+                        continue
+
+                    preferred = self.parsed_players.get(username)
+                    if preferred and len(preferred) == 1 and preferred[0] == position:
+                        shuffled_team.append({
+                            "username": username,
+                            "class": position
+                        })
+                        assigned_players.add(username)
+                        logging.info("🔒 [단일 지정 고정 배정] %s → %s", username, position)
+                        break
 
             # 1. 유저 지정 클래스 우선 배정
             for position in positions:
