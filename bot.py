@@ -37,6 +37,7 @@ class ConfirmView(discord.ui.View):
         self.error_message = error_message
         self.payload_type = payload_type  # "generic" | "game_result"
         self.game_number = game_number
+        self._has_been_clicked = False  # ✅ 버튼 중복 방지
 
         # ✅ 로깅 설정 (DEBUG 모드 활성화)
         logging.basicConfig(level=logging.DEBUG)
@@ -45,7 +46,16 @@ class ConfirmView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """✅ 버튼을 누른 사용자가 명령어를 입력한 유저인지 확인"""
         logging.debug(f"👤 [확인] {interaction.user} 가 버튼 클릭 (입력한 유저: {self.ctx.author})")
-        return interaction.user == self.ctx.author
+        is_author = interaction.user == self.ctx.author
+        if not is_author:
+            await interaction.response.send_message("❌ 당신은 이 요청을 보낸 유저가 아닙니다.", ephemeral=True)
+            return False
+        if self._has_been_clicked:
+            await interaction.response.send_message("⚠️ 이미 처리 중입니다!", ephemeral=True)
+            return False
+
+        self._has_been_clicked = True
+        return True
 
     async def send_followup(self, interaction: discord.Interaction, message: str):
         """✅ 처리 중 메시지 전송"""
@@ -66,6 +76,13 @@ class ConfirmView(discord.ui.View):
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         """✅ 확인 버튼을 눌렀을 때 실행"""
         await interaction.response.defer()
+
+        # 🔒 버튼들 비활성화
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        await interaction.message.edit(view=self)
+
         followup_message = await self.send_followup(interaction, "처리 중입니다.")
 
         try:
@@ -89,11 +106,11 @@ class ConfirmView(discord.ui.View):
                 message = self.success_message  # 일반적인 명령어 처리
 
             logging.info(f"✅ [성공] 응답 처리 완료 → {message}")
-            await followup_message.edit(content=message)
+            await followup_message.edit(content=message, view=None)  # 버튼 제거
 
         except (requests.RequestException, Exception) as e:
             logging.error(f"🚨 [오류] {e}")
-            await followup_message.edit(content=f"🚨 {self.error_message}\n오류: {str(e)}")
+            await followup_message.edit(content=f"🚨 {self.error_message}\n오류: {str(e)}", view=None)
 
         self.stop()
 
@@ -101,6 +118,13 @@ class ConfirmView(discord.ui.View):
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         """❌ 취소 버튼을 눌렀을 때 실행"""
         logging.info(f"🚫 [취소] {self.ctx.author} 님이 요청을 취소함")
+
+        # 🔒 버튼들 비활성화
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        await interaction.message.edit(view=self)
+
         await interaction.response.send_message("🚫 작업이 취소되었습니다.", ephemeral=True)
         self.stop()
 
@@ -583,7 +607,7 @@ async def validate_and_register(ctx, win_players, lose_players, win_score, lose_
         return
 
     # ✅ 경기번호 생성
-    game_number = datetime.now().strftime("%y%m%d%H%M")
+    game_number = datetime.now().strftime("%y%m%d%H%M%S")
     logging.info(f"🎮 생성된 경기번호: {game_number}")
 
     payload = {
@@ -1826,5 +1850,82 @@ async def 팀생성(ctx, *, players: str = None):
     view = TeamGenerationView(ctx, converted_players, parsed_players)
     message = await ctx.send("🔄 **팀을 생성할 방식을 선택하세요!**", view=view)
     view.message = message  # ✅ 첫 번째 메시지를 저장하여 이후 MIX 버튼 클릭 시 업데이트 가능
+
+@bot.command()
+async def 백업(ctx):
+    """🛠 스프레드시트 수동 백업"""
+    await ctx.send("📦 백업을 시작합니다...")
+
+    response = requests.post(GAS_URL, json={"action": "triggerBackupFromDiscord"})
+
+    if response.status_code != 200:
+        await ctx.send("🚨 서버 오류로 백업에 실패했습니다.")
+        return
+
+    data = response.json()
+    if "error" in data:
+        await ctx.send(f"🚨 오류 발생: {data['error']}")
+    else:
+        await ctx.send(f"✅ {data['success']}")
+
+@bot.command()
+async def 백업정리(ctx):
+    """🧹 오래된 백업 정리"""
+    await ctx.send("🧹 오래된 백업을 정리하는 중입니다...")
+
+    response = requests.post(GAS_URL, json={"action": "cleanupBackups"})
+
+    if response.status_code != 200:
+        await ctx.send("🚨 서버 오류로 백업 정리에 실패했습니다.")
+        return
+
+    data = response.json()
+    if "error" in data:
+        await ctx.send(f"🚨 오류 발생: {data['error']}")
+    else:
+        await ctx.send(f"✅ {data['success']}")
+
+@bot.command()
+async def 스냅샷(ctx, *, season_name: str = None):
+    """📊 특정 시즌 기준으로 스냅샷 생성"""
+    if not season_name:
+        await ctx.send("❗ 시즌명을 입력해주세요!\n예: `!스냅샷 2024-04 시즌`")
+        return
+
+    await ctx.send(f"📊 `{season_name}` 기준으로 스냅샷을 생성 중입니다...")
+
+    response = requests.post(GAS_URL, json={
+        "action": "generateSeasonSnapshot",
+        "seasonName": season_name
+    })
+
+    if response.status_code != 200:
+        await ctx.send("🚨 서버 오류로 스냅샷 생성에 실패했습니다.")
+        return
+
+    data = response.json()
+    if "error" in data:
+        await ctx.send(f"🚨 오류 발생: {data['error']}")
+    else:
+        await ctx.send(f"✅ {data['success']}")
+
+@bot.command()
+async def 시즌목록(ctx):
+    """📋 시즌 시트 기준으로 시즌 목록 + 기간 출력"""
+    response = requests.post(GAS_URL, json={"action": "getSeasonList"})
+
+    if response.status_code != 200:
+        await ctx.send("🚨 서버 오류로 시즌 목록을 불러올 수 없습니다.")
+        return
+
+    data = response.json()
+    if "seasons" in data and data["seasons"]:
+        formatted = "\n".join(
+            f"• `{s['name']}` ({s['start']} ~ {s['end']})" for s in data["seasons"]
+        )
+        await ctx.send(f"📋 시즌 목록:\n{formatted}")
+    else:
+        await ctx.send("📂 시즌 시트에 등록된 시즌이 없습니다.")
+
 
 bot.run(TOKEN)
