@@ -40,3 +40,7 @@ Desktop.ini
 *.log
 *.bak
 *.tmp
+
+# PyCharm
+.idea/
+*.iml
