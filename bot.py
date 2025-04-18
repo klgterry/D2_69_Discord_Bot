@@ -98,6 +98,13 @@ class ConfirmView(discord.ui.View):
 
             response_text = response.text.strip().strip('"')
 
+            try:
+                data = json.loads(response_text)
+                if "error" in data:
+                    raise Exception(data["error"])
+            except json.JSONDecodeError:
+                data = {}
+
             # ✅ "game_result" 타입인 경우, 경기번호 포함 메시지 생성
             if self.payload_type == "game_result":
                 game_number = self.extract_game_number(response_text)
@@ -127,6 +134,84 @@ class ConfirmView(discord.ui.View):
 
         await interaction.response.send_message("🚫 작업이 취소되었습니다.", ephemeral=True)
         self.stop()
+
+class RollbackSelectView(discord.ui.View):
+    def __init__(self, ctx, options):
+        super().__init__(timeout=30)
+        self.ctx = ctx
+        self.add_item(RollbackSelectMenu(options, self))
+
+class RollbackSelectMenu(discord.ui.Select):
+    def __init__(self, options, parent_view):
+        super().__init__(placeholder="🔽 복구할 백업 파일을 선택하세요!", min_values=1, max_values=1, options=options)
+        self.parent_view = parent_view
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+        if interaction.user != self.parent_view.ctx.author:
+            await interaction.followup.send("❌ 당신은 이 작업을 요청한 유저가 아닙니다.", ephemeral=True)
+            return
+
+        file_id = self.values[0]
+        file_name = next((opt.label for opt in self.options if opt.value == file_id), "알 수 없음")
+
+        # ✅ 복구 확인 메시지
+        confirm_msg = f"⚠️ `{file_name}` 파일로 복구하시겠습니까?"
+
+        view = ConfirmRollbackView(self.parent_view.ctx, file_id, file_name)
+        await interaction.followup.send(confirm_msg, view=view)
+        self.parent_view.stop()
+
+
+class ConfirmRollbackView(discord.ui.View):
+    def __init__(self, ctx, file_id, file_name):
+        super().__init__(timeout=30)
+        self.ctx = ctx
+        self.file_id = file_id
+        self.file_name = file_name
+
+    @discord.ui.button(label="✅ 복구", style=discord.ButtonStyle.green)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ 당신은 이 작업을 요청한 유저가 아닙니다.", ephemeral=True)
+            return
+
+        # 🔄 로딩 메시지 출력 전 버튼 비활성화
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        await interaction.message.edit(view=self)
+
+        # 🔄 로딩 메시지
+        await interaction.response.defer()
+        loading_msg = await interaction.followup.send("🔄 복구 중입니다... 잠시만 기다려주세요!")
+
+        # 🛰️ 복구 요청
+        logging.info(f"📂 복구 확정됨 → file_id: {self.file_id}")
+        try:
+            response = await asyncio.to_thread(requests.post, GAS_URL, json={
+                "action": "restoreFromFile",
+                "file_id": self.file_id
+            })
+
+            if response.status_code == 200 and "success" in response.text:
+                await loading_msg.edit(content=f"✅ **복구 완료!** `{self.file_name}` 로 되돌렸습니다.")
+            else:
+                await loading_msg.edit(content=f"🚨 복구 실패! 서버 응답: {response.text}")
+
+        except Exception as e:
+            await loading_msg.edit(content=f"🚨 복구 중 예외 발생: {e}")
+
+        self.stop()
+
+    @discord.ui.button(label="❌ 취소", style=discord.ButtonStyle.red)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("🚫 복구 작업이 취소되었습니다.", ephemeral=True)
+        self.stop()
+
+
+
 
 
 @bot.event
@@ -882,24 +967,35 @@ async def 도움말(ctx):
     logging.info(f"📥 `!도움말` 명령어 실행됨. 요청한 사용자: {ctx.author.name}")
 
     help_text = (
-        "**📜 사용 가능한 명령어 목록:**\n"
-        "```yaml\n"
-        "\"!등록 [유저명]\" - 🆕 유저 등록\n"
-        "\"!별명등록 [유저명] [별명1, 별명2, ...]\" - 🏷 유저 별명 추가\n"
-        "\"!별명삭제 [유저명]\" - ❌ 유저 별명 삭제\n"
-        "\"!삭제 [유저명]\" - ❌ 유저 삭제\n"
-        "\"!조회 [유저명]\" - 🔍 유저 정보 조회\n"
-        "\"!클래스 [유저명] [클래스명]\" - 🛡 유저 클래스 등록\n"
-        "\"!결과등록 [아래*]유저1/유저2,... vs [위*]유저1/유저2,...\" (* = 경기스코어) - 📊 경기 결과 등록\n"
-        "\"!결과조회 [게임번호]\" - 📄 경기 결과 조회\n"
-        "\"!결과삭제 [게임번호]\" - 🗑 경기 기록 삭제\n"
-        "\"!팀생성 [유저1, 유저2, ...]\" - 🤝 자동 팀 생성\n"
-        "\"!팀생성고급 [유저1, 유저2, ...]\" - 🔒 자동 팀 생성 (관리자 전용)\n"
-        "\"!MMR갱신\" - 🔄 전체 유저의 MMR 갱신 (관리자 전용)\n"
-        "\"!홈페이지\" - 🌐 내전 기록실 이동\n"
-        "\"!세팅\" - 🔧 캐릭터별 세팅 정보 보기\n"
-        "\"!도움말\" - 📜 명령어 목록 확인\n"
-        "```"
+        "**📘 사용 가능한 명령어 목록**\n\n"
+
+        "**🧑‍💼 유저 관리**\n"
+        "📥 `!등록` [유저명] [클래스] [별명] - 유저 등록 또는 수정\n"
+        "🧾 `!조회` [유저명] - 유저 정보 조회\n"
+        "🛡️ `!클래스` [유저명] [클래스] - 클래스 등록/변경\n"
+        "🏷️ `!별명등록` [유저명] [별명들] - 별명 등록 (👑 관리자 전용)\n"
+        "❌ `!별명삭제` [유저명] - 별명 전체 삭제 (👑 관리자 전용)\n\n"
+
+        "**📊 경기 기록**\n"
+        "📝 `!결과등록` [경기결과] - 경기 결과 등록\n"
+        "📄 `!결과조회` [게임번호] - 특정 경기 or 최근 5경기 조회\n"
+        "⏪ `!최근결과삭제` - 가장 최근 결과 복구 (30분 이내)\n\n"
+
+        "**🤝 팀 생성**\n"
+        "🔀 `!팀생성` [유저(클래스)] - MMR 기반 팀 생성 (클래스 포함)\n"
+        "🔐 `!팀생성고급` [유저1, ..., 유저8] - 고급 랜덤 팀 생성\n\n"
+
+        "**🛠️ 백업 / 시즌 (👑 관리자 전용)**\n"
+        "💾 `!백업` - 수동 백업 실행\n"
+        "🧹 `!백업정리` - 오래된 백업 정리\n"
+        "📦 `!롤백` - 백업 파일에서 롤백\n"
+        "📸 `!스냅샷` [시즌명] - 시즌별 스냅샷 생성\n"
+        "🗂️ `!시즌목록` - 시즌 목록과 기간 확인\n\n"
+
+        "**🌐 기타**\n"
+        "🖥️ `!홈페이지` - 리그 기록실 링크\n"
+        "🛠️ `!세팅` - 클래스별 세팅 가이드\n"
+        "📘 `!도움말` - 명령어 전체 보기\n"
     )
 
     logging.info("📜 도움말 메시지 내용 준비 완료.")
@@ -1926,6 +2022,53 @@ async def 시즌목록(ctx):
         await ctx.send(f"📋 시즌 목록:\n{formatted}")
     else:
         await ctx.send("📂 시즌 시트에 등록된 시즌이 없습니다.")
+
+
+@bot.command()
+async def 최근결과삭제(ctx):
+    """
+    ⏪ 가장 최근 경기 결과를 복구하는 명령어
+    - 경기 등록 후 30분 이내만 가능
+    - Players / Results / History 시트를 복구
+    """
+    # ✅ 복구 요청 시 다시 한 번 확인
+    confirm_msg = (
+        "⚠️ **정말 마지막으로 등록된 경기 결과를 되돌리시겠습니까?**\n"
+        "📌 **30분이 경과한 백업은 자동으로 삭제되므로 복구할 수 없습니다.**"
+    )
+
+    view = ConfirmView(
+        ctx,
+        {"action": "restoreLastBackup"},
+        "✅ 마지막 경기 결과가 복구되었습니다!",
+        "🚨 복구에 실패했습니다.",
+        payload_type="game_result"
+    )
+
+    await ctx.send(confirm_msg, view=view)
+
+@bot.command()
+async def 롤백(ctx):
+    """📦 백업 파일 중 하나를 선택하여 롤백"""
+    response = requests.post(GAS_URL, json={"action": "getBackupFileList"})
+    if response.status_code != 200:
+        await ctx.send("🚨 백업 목록 불러오기 실패!")
+        return
+
+    data = response.json()
+    backups = data.get("backups", [])
+    if not backups:
+        await ctx.send("📂 백업 파일이 존재하지 않습니다.")
+        return
+
+    # 최대 10개까지만
+    options = [
+        discord.SelectOption(label=b["name"], value=b["id"], description=b["created"].split("T")[0])
+        for b in backups[:5]
+    ]
+
+    view = RollbackSelectView(ctx, options)
+    await ctx.send("📁 복구할 백업 파일을 선택해주세요:", view=view)
 
 
 bot.run(TOKEN)
