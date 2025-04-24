@@ -21,7 +21,7 @@ intents.message_content = True  # 메시지 내용을 읽을 수 있도록 설�
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 class ConfirmView(discord.ui.View):
-    def __init__(self, ctx, payload, success_message, error_message, payload_type="generic", game_number=None):
+    def __init__(self, ctx, payload, success_message, error_message, payload_type="generic", game_number=None, is_best_of_five=False):
         """
         ✅ 범용적으로 사용할 수 있는 확인용 View
         :param ctx: 명령어 호출한 유저 정보
@@ -38,23 +38,25 @@ class ConfirmView(discord.ui.View):
         self.payload_type = payload_type  # "generic" | "game_result"
         self.game_number = game_number
         self._has_been_clicked = False  # ✅ 버튼 중복 방지
+        self.is_best_of_five = is_best_of_five  # ✅ 기본값은 5선승
 
         # ✅ 로깅 설정 (DEBUG 모드 활성화)
         logging.basicConfig(level=logging.DEBUG)
         logging.info(f"📌 ConfirmView 생성됨 (Payload: {self.payload})")
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """✅ 버튼을 누른 사용자가 명령어를 입력한 유저인지 확인"""
         logging.debug(f"👤 [확인] {interaction.user} 가 버튼 클릭 (입력한 유저: {self.ctx.author})")
         is_author = interaction.user == self.ctx.author
         if not is_author:
             await interaction.response.send_message("❌ 당신은 이 요청을 보낸 유저가 아닙니다.", ephemeral=True)
             return False
-        if self._has_been_clicked:
-            await interaction.response.send_message("⚠️ 이미 처리 중입니다!", ephemeral=True)
-            return False
 
-        self._has_been_clicked = True
+        # ✅ 확인 버튼이 눌릴 때만 _has_been_clicked 확인
+        if interaction.data["custom_id"] == self.confirm.custom_id:
+            if self._has_been_clicked:
+                await interaction.response.send_message("⚠️ 이미 처리 중입니다!", ephemeral=True)
+                return False
+
         return True
 
     async def send_followup(self, interaction: discord.Interaction, message: str):
@@ -72,7 +74,7 @@ class ConfirmView(discord.ui.View):
             match = re.search(r"게임번호:\s*(\d+)", response_text)
             return match.group(1) if match else "알 수 없음"
 
-    @discord.ui.button(label="✅ 확인", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="✅ 확인", style=discord.ButtonStyle.green, custom_id="confirm_button")
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         """✅ 확인 버튼을 눌렀을 때 실행"""
         await interaction.response.defer()
@@ -86,6 +88,22 @@ class ConfirmView(discord.ui.View):
         followup_message = await self.send_followup(interaction, "처리 중입니다.")
 
         try:
+            # ✅ 3선/5선 모드에 따른 스코어 유효성 검사
+            win_score = self.payload.get("win_score", 0)
+            lose_score = self.payload.get("lose_score", 0)
+            total_score = win_score + lose_score
+
+            if self.is_best_of_five:
+                if win_score != 5 or lose_score >= 5:
+                    raise Exception("5선승 모드: 승리팀은 5점, 패배팀은 0~4점이어야 합니다.")
+                if total_score > 9:
+                    raise Exception("5선승 모드: 양 팀 합계가 9점을 초과할 수 없습니다.")
+            else:
+                if win_score != 3 or lose_score >= 3:
+                    raise Exception("3선승 모드: 승리팀은 3점, 패배팀은 0~2점이어야 합니다.")
+                if total_score > 5:
+                    raise Exception("3선승 모드: 양 팀 합계가 5점을 초과할 수 없습니다.")
+
             logging.info(f"🚀 [요청 전송] Payload: {self.payload}")
             response = await asyncio.to_thread(requests.post, GAS_URL, json=self.payload)
 
@@ -134,6 +152,15 @@ class ConfirmView(discord.ui.View):
 
         await interaction.response.send_message("🚫 작업이 취소되었습니다.", ephemeral=True)
         self.stop()
+
+    @discord.ui.button(label="🔁 선승 모드 (현재: 3선승)", style=discord.ButtonStyle.blurple, row=0)
+    async def toggle_round_mode(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.is_best_of_five = not self.is_best_of_five
+        mode_label = "5선승" if self.is_best_of_five else "3선승"
+        button.label = f"🔁 선승 모드 (현재: {mode_label})"
+        button.style = discord.ButtonStyle.gray if self.is_best_of_five else discord.ButtonStyle.blurple
+
+        await interaction.response.edit_message(view=self)
 
 class RollbackSelectView(discord.ui.View):
     def __init__(self, ctx, options):
@@ -613,16 +640,17 @@ async def 결과등록(ctx, *, input_text: str = None):
 
             logging.info(f"🏆 승리팀 점수: {win_score}, ❌ 패배팀 점수: {lose_score}, 🔄 총합: {total_score}")
 
-            if total_score > 9:
-                logging.warning(f"🚨 점수 총합 초과! {total_score}점 (최대 9점 가능)")
-                await ctx.send(
-                    f"🚨 **결과 등록 불가** ⚠\n"
-                    f"→ `{input_text}`\n"
-                    "❌ **양 팀 스코어의 합이 9를 초과하므로, 등록할 수 없습니다!**"
-                )
-                return
+        win_players, lose_players, win_score, lose_score, status = parse_match_input(input_text)
 
-        win_players, lose_players, win_score, lose_score = parse_match_input(input_text)
+        if status == "invalid_format":
+            await ctx.send("🚨 **잘못된 형식입니다!**\n`!결과등록 [아래5]유저1/... vs [위4]유저5/...`")
+            return
+        elif status == "invalid_player_count":
+            await ctx.send("🚨 **플레이어 수 오류입니다!** 양 팀 모두 4명씩 입력해야 합니다.")
+            return
+        elif status == "draw":
+            await ctx.send("🚨 **동점 경기는 등록할 수 없습니다!**")
+            return
 
         logging.info(f"🏆 승리팀: {win_players}, ❌ 패배팀: {lose_players}, 🏅 스코어: {win_score}-{lose_score}")
 
@@ -632,16 +660,6 @@ async def 결과등록(ctx, *, input_text: str = None):
                 "🚨 **잘못된 형식입니다!**\n"
                 "`!결과등록 [아래5]유저1,유저2,유저3,유저4 vs [위4]유저5,유저6,유저7,유저8`\n"
                 "✅ **순서 주의:** 반드시 `드,어,넥,슴` 클래스 순서대로 입력해야 합니다."
-            )
-            return
-
-        # ✅ **승리 팀 스코어는 무조건 5점이어야 함**
-        if win_score != 5:
-            logging.warning(f"🚨 승리팀 점수 오류! (승리팀 점수: {win_score}, 반드시 5점이어야 함)")
-            await ctx.send(
-                f"🚨 **결과 등록 불가** ⚠\n"
-                f"→ `{input_text}`\n"
-                "❌ **승리 팀의 스코어는 반드시 5점이어야 합니다!**"
             )
             return
 
@@ -736,7 +754,7 @@ def parse_match_input(input_text):
 
     if not match:
         logging.warning(f"🚨 입력 형식 오류: {input_text}")
-        return None, None, None, None
+        return None, None, None, None, "invalid_format"
 
     below_score = int(match.group(1))
     above_score = int(match.group(3))
@@ -745,15 +763,16 @@ def parse_match_input(input_text):
 
     if len(below_players) != 4 or len(above_players) != 4:
         logging.warning(f"🚨 플레이어 수 오류: {below_players} vs {above_players}")
-        return None, None, None, None
+        return None, None, None, None, "invalid_player_count"
+
+    if below_score == above_score:
+        logging.warning(f"🚨 동점 경기 발생: {input_text}")
+        return None, None, None, None, "draw"
 
     if below_score > above_score:
-        return below_players, above_players, below_score, above_score
-    elif above_score > below_score:
-        return above_players, below_players, above_score, below_score
+        return below_players, above_players, below_score, above_score, "valid"
     else:
-        logging.warning(f"🚨 동점 경기 발생: {input_text}")
-        return None, None, None, None
+        return above_players, below_players, above_score, below_score, "valid"
 
 def format_team(team):
     """
