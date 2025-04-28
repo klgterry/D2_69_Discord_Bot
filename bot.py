@@ -21,28 +21,61 @@ intents.message_content = True  # 메시지 내용을 읽을 수 있도록 설�
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 class ConfirmView(discord.ui.View):
-    def __init__(self, ctx, payload, success_message, error_message, payload_type="generic", game_number=None, is_best_of_five=False):
-        """
-        ✅ 범용적으로 사용할 수 있는 확인용 View
-        :param ctx: 명령어 호출한 유저 정보
-        :param payload: GAS 요청 데이터
-        :param success_message: 성공 시 출력할 메시지 (문자열 or 함수)
-        :param error_message: 실패 시 출력할 메시지
-        :param payload_type: "generic" (기본) or "game_result" (경기 결과 등록/삭제)
-        """
+    def __init__(self, ctx, payload, success_message, error_message, payload_type="generic", game_number=None, round_mode=4):
         super().__init__(timeout=30)
         self.ctx = ctx
         self.payload = payload
-        self.success_message = success_message  # 문자열 또는 콜백 함수
+        self.success_message = success_message
         self.error_message = error_message
-        self.payload_type = payload_type  # "generic" | "game_result"
+        self.payload_type = payload_type
         self.game_number = game_number
-        self._has_been_clicked = False  # ✅ 버튼 중복 방지
-        self.is_best_of_five = is_best_of_five  # ✅ 기본값은 5선승
+        self.round_mode = round_mode
+        self._has_been_clicked = False
 
-        # ✅ 로깅 설정 (DEBUG 모드 활성화)
+        self.is_best_of_three = round_mode == 3
+        self.is_best_of_four = round_mode == 4
+        self.is_best_of_five = round_mode == 5
+
         logging.basicConfig(level=logging.DEBUG)
-        logging.info(f"📌 ConfirmView 생성됨 (Payload: {self.payload})")
+        logging.info(f"📌 ConfirmView 생성됨 (Payload: {self.payload}, PayloadType: {self.payload_type})")
+
+        # ✅ payload_type이 "game_result"일 때만 선승 모드 토글 버튼 추가
+        if self.payload_type == "game_result":
+            self.add_item(self.ToggleRoundModeButton(self))  # ✅ (self) 넘겨줌
+
+    class ToggleRoundModeButton(discord.ui.Button):
+        def __init__(self, view):
+            round_mode = view.round_mode  # ✅ view로부터 현재 round_mode 받아옴
+
+            super().__init__(
+                label=f"🔁 선승 모드 (현재: {round_mode}선승)",
+                style={
+                    3: discord.ButtonStyle.blurple,
+                    4: discord.ButtonStyle.grey,
+                    5: discord.ButtonStyle.green
+                }.get(round_mode, discord.ButtonStyle.grey),
+                row=0
+            )
+
+        async def callback(self, interaction: discord.Interaction):
+            view = self.view
+            if not hasattr(view, "round_mode"):
+                view.round_mode = 4
+            else:
+                view.round_mode = {3: 4, 4: 5, 5: 3}[view.round_mode]
+
+            view.is_best_of_three = view.round_mode == 3
+            view.is_best_of_four = view.round_mode == 4
+            view.is_best_of_five = view.round_mode == 5
+
+            self.label = f"🔁 선승 모드 (현재: {view.round_mode}선승)"
+            self.style = {
+                3: discord.ButtonStyle.blurple,
+                4: discord.ButtonStyle.grey,
+                5: discord.ButtonStyle.green
+            }[view.round_mode]
+
+            await interaction.response.edit_message(view=view)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         logging.debug(f"👤 [확인] {interaction.user} 가 버튼 클릭 (입력한 유저: {self.ctx.author})")
@@ -76,10 +109,8 @@ class ConfirmView(discord.ui.View):
 
     @discord.ui.button(label="✅ 확인", style=discord.ButtonStyle.green, custom_id="confirm_button")
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """✅ 확인 버튼을 눌렀을 때 실행"""
         await interaction.response.defer()
 
-        # 🔒 버튼들 비활성화
         for child in self.children:
             if isinstance(child, discord.ui.Button):
                 child.disabled = True
@@ -88,34 +119,33 @@ class ConfirmView(discord.ui.View):
         followup_message = await self.send_followup(interaction, "처리 중입니다.")
 
         try:
-            # ✅ 3선/5선 모드에 따른 스코어 유효성 검사
-            win_score = self.payload.get("win_score", 0)
-            lose_score = self.payload.get("lose_score", 0)
-            total_score = win_score + lose_score
+            # ✅ game_result 타입일 때만 선승모드 스코어 검사
+            if self.payload_type == "game_result":
+                win_score = self.payload.get("win_score", 0)
+                lose_score = self.payload.get("lose_score", 0)
+                total_score = win_score + lose_score
+                max_score = self.round_mode
 
-            if self.is_best_of_five:
-                if win_score != 5 or lose_score >= 5:
-                    raise Exception("5선승 모드: 승리팀은 5점, 패배팀은 0~4점이어야 합니다.")
-                if total_score > 9:
-                    raise Exception("5선승 모드: 양 팀 합계가 9점을 초과할 수 없습니다.")
-            else:
-                if win_score != 3 or lose_score >= 3:
-                    raise Exception("3선승 모드: 승리팀은 3점, 패배팀은 0~2점이어야 합니다.")
-                if total_score > 5:
-                    raise Exception("3선승 모드: 양 팀 합계가 5점을 초과할 수 없습니다.")
+                # ✅ 콜드게임 예외 처리 (4선승 모드 + 3:0 or 0:3)
+                is_cold_game = (
+                        max_score == 4 and
+                        ((win_score == 3 and lose_score == 0) or (win_score == 0 and lose_score == 3))
+                )
 
+                if (win_score != max_score or lose_score >= max_score) and not is_cold_game:
+                    raise Exception(f"{max_score}선승 모드: 승리팀은 {max_score}점, 패배팀은 0~{max_score - 1}점이어야 합니다.")
+                if total_score > max_score + (max_score - 1) and not is_cold_game:
+                    raise Exception(
+                        f"{max_score}선승 모드: 양 팀 합계는 최대 {max_score}:{max_score - 1}로, 총 {max_score + (max_score - 1)}점을 초과할 수 없습니다.")
+
+            # ✅ 정상 요청 처리
             logging.info(f"🚀 [요청 전송] Payload: {self.payload}")
             response = await asyncio.to_thread(requests.post, GAS_URL, json=self.payload)
-
-            # ✅ 디버깅: 응답 상태 코드와 내용 출력
-            logging.info(f"🚀 [응답 코드] {response.status_code}")
-            logging.debug(f"📥 [응답 본문] {response.text}")
 
             if response.status_code != 200:
                 raise requests.HTTPError(f"응답 코드 {response.status_code}")
 
             response_text = response.text.strip().strip('"')
-
             try:
                 data = json.loads(response_text)
                 if "error" in data:
@@ -123,18 +153,15 @@ class ConfirmView(discord.ui.View):
             except json.JSONDecodeError:
                 data = {}
 
-            # ✅ "game_result" 타입인 경우, 경기번호 포함 메시지 생성
             if self.payload_type == "game_result":
                 game_number = self.extract_game_number(response_text)
                 message = self.success_message(game_number) if callable(self.success_message) else self.success_message
             else:
-                message = self.success_message  # 일반적인 명령어 처리
+                message = self.success_message
 
-            logging.info(f"✅ [성공] 응답 처리 완료 → {message}")
-            await followup_message.edit(content=message, view=None)  # 버튼 제거
+            await followup_message.edit(content=message, view=None)
 
         except (requests.RequestException, Exception) as e:
-            logging.error(f"🚨 [오류] {e}")
             await followup_message.edit(content=f"🚨 {self.error_message}\n오류: {str(e)}", view=None)
 
         self.stop()
@@ -153,14 +180,6 @@ class ConfirmView(discord.ui.View):
         await interaction.response.send_message("🚫 작업이 취소되었습니다.", ephemeral=True)
         self.stop()
 
-    @discord.ui.button(label="🔁 선승 모드 (현재: 3선승)", style=discord.ButtonStyle.blurple, row=0)
-    async def toggle_round_mode(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.is_best_of_five = not self.is_best_of_five
-        mode_label = "5선승" if self.is_best_of_five else "3선승"
-        button.label = f"🔁 선승 모드 (현재: {mode_label})"
-        button.style = discord.ButtonStyle.gray if self.is_best_of_five else discord.ButtonStyle.blurple
-
-        await interaction.response.edit_message(view=self)
 
 class RollbackSelectView(discord.ui.View):
     def __init__(self, ctx, options):
@@ -677,12 +696,12 @@ async def 결과등록(ctx, *, input_text: str = None):
 
 async def validate_and_register(ctx, win_players, lose_players, win_score, lose_score):
     """
-    ✅ 유저 등록 여부 확인 후 경기 등록 진행
+    ✅ 유저 등록 여부 확인 후 경기 등록 진행 (action 기반 payload_type 자동 결정)
     """
     logging.info(f"✅ 유저 등록 여부 확인 중: {win_players + lose_players}")
 
     # 명령어 실행한 유저 정보 추가
-    submitted_by = ctx.author.display_name  # 디스코드 닉네임 가져오기
+    submitted_by = ctx.author.display_name
     logging.info(f"📢 경기 결과 등록 요청자: {submitted_by}")
 
     all_players = win_players + lose_players
@@ -713,6 +732,7 @@ async def validate_and_register(ctx, win_players, lose_players, win_score, lose_
     game_number = datetime.now().strftime("%y%m%d%H%M%S")
     logging.info(f"🎮 생성된 경기번호: {game_number}")
 
+    # ✅ payload 준비
     payload = {
         "action": "registerResult",
         "game_number": game_number,
@@ -720,22 +740,28 @@ async def validate_and_register(ctx, win_players, lose_players, win_score, lose_
         "losers": lose_players,
         "win_score": win_score,
         "lose_score": lose_score,
-        "submitted_by": submitted_by  # ✅ 추가: 경기 등록자 닉네임
+        "submitted_by": submitted_by
     }
     logging.info(f"🚀 경기 결과 등록 요청 데이터: {payload}")
 
+    # ✅ action 기반 payload_type 자동 결정
+    action = payload.get("action", "")
+    payload_type = "game_result" if action == "registerResult" else "generic"
+
+    # ✅ ConfirmView 생성
     view = ConfirmView(
-        ctx,
-        payload,
-        lambda x: f"✅ 경기 결과가 기록되었습니다! **[게임번호: {game_number}]**\n"
-                  f"🏆 **승리 팀:** {format_team(win_players)} (스코어: {win_score})\n"
-                  f"❌ **패배 팀:** {format_team(lose_players)} (스코어: {lose_score})\n"
-                  f"👤 **등록자:** {submitted_by}",
-        "🚨 경기 등록 요청에 실패했습니다.",
-        payload_type="game_result",
+        ctx=ctx,
+        payload=payload,
+        success_message=lambda x: f"✅ 경기 결과가 기록되었습니다! **[게임번호: {game_number}]**\n"
+                                  f"🏆 **승리 팀:** {format_team(win_players)} (스코어: {win_score})\n"
+                                  f"❌ **패배 팀:** {format_team(lose_players)} (스코어: {lose_score})\n"
+                                  f"👤 **등록자:** {submitted_by}",
+        error_message="🚨 경기 등록 요청에 실패했습니다.",
+        payload_type=payload_type,
         game_number=game_number
     )
 
+    # ✅ 최종 메시지 전송
     await ctx.send(
         f"📊 **승리 팀:** {format_team(win_players)} (스코어: {win_score})\n"
         f"❌ **패배 팀:** {format_team(lose_players)} (스코어: {lose_score})\n"
@@ -970,7 +996,6 @@ async def 결과삭제(ctx, game_number: str = None):
         delete_payload,
         result_message,
         "🚨 경기 삭제 요청에 실패했습니다.",
-        payload_type="game_result",
         game_number=game_number
     )
 
@@ -2060,8 +2085,7 @@ async def 최근결과삭제(ctx):
         ctx,
         {"action": "restoreLastBackup"},
         "✅ 마지막 경기 결과가 복구되었습니다!",
-        "🚨 복구에 실패했습니다.",
-        payload_type="game_result"
+        "🚨 복구에 실패했습니다."
     )
 
     await ctx.send(confirm_msg, view=view)
