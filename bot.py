@@ -11,6 +11,9 @@ from datetime import datetime
 import os
 from dotenv import load_dotenv
 
+with open("bot_pid.txt", "w") as f:
+    f.write(str(os.getpid()))
+
 load_dotenv()  # .env 파일 로드
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 GAS_URL = os.getenv("GAS_URL")
@@ -573,20 +576,27 @@ async def 클래스(ctx, username: str = None, *, classes: str = None):
     valid_classes = ["드", "어", "넥", "슴"]  # ✅ 고정된 클래스 순서
 
     def format_classes(class_input):
-        """✅ 입력받은 클래스 정리 및 중복 제거 후 정렬"""
         class_list = [c.strip() for c in re.split(r"[,/]", class_input)]
-        class_list = sorted(set(class_list), key=lambda x: valid_classes.index(x) if x in valid_classes else len(valid_classes))
-        return ", ".join(class_list)
+        valid_class_list = [c for c in class_list if c in valid_classes]
+        invalid_class_list = [c for c in class_list if c not in valid_classes]
+        valid_class_list = sorted(set(valid_class_list), key=lambda x: valid_classes.index(x))
+        return ", ".join(valid_class_list), invalid_class_list
 
     # ✅ 직접 입력 방식 (username + classes 함께 입력됨)
     if username and classes:
         logging.info(f"🚀 [클래스 등록 요청] username: {username}, classes: {classes}")
-        formatted_classes = format_classes(classes)
+        formatted_classes, invalids = format_classes(classes)
+
+        if not formatted_classes:
+            await ctx.send("🚫 유효한 클래스가 없습니다. `드, 어, 넥, 슴` 중에서 입력하세요.")
+            return
+        if invalids:
+            await ctx.send(f"⚠️ 유효하지 않은 클래스는 제외됩니다: {', '.join(invalids)}")
 
         payload = {
             "action": "registerClass",
             "username": username,
-            "classes": formatted_classes  # ✅ 정렬된 클래스 저장
+            "classes": formatted_classes
         }
         logging.info(f"📡 GAS로 전송할 데이터: {payload}")
 
@@ -610,10 +620,19 @@ async def 클래스(ctx, username: str = None, *, classes: str = None):
 
         await ctx.send(f"🛡 `{username}` 님의 클래스를 입력하세요! (쉼표 또는 슬래시 구분, 예시: 드,어/넥,슴) (30초 내 입력)")
 
-        msg = await bot.wait_for("message", check=lambda m: m.author == ctx.author, timeout=30.0)
-        formatted_classes = format_classes(msg.content)
+        while True:
+            msg = await bot.wait_for("message", check=lambda m: m.author == ctx.author, timeout=30.0)
+            formatted_classes, invalids = format_classes(msg.content)
+            logging.info(f"📋 입력된 클래스: {formatted_classes}")
 
-        logging.info(f"📋 입력된 클래스: {formatted_classes}")
+            if not formatted_classes:
+                await ctx.send("🚫 유효한 클래스가 없습니다. `드, 어, 넥, 슴` 중에서 다시 입력해주세요.")
+                continue
+
+            if invalids:
+                await ctx.send(f"⚠️ 유효하지 않은 클래스는 제외됩니다: {', '.join(invalids)}")
+
+            break  # ✅ 유효한 클래스가 들어오면 루프 탈출
 
         payload = {
             "action": "registerClass",
